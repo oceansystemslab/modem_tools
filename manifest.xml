@@ -1,0 +1,16 @@
+<package>
+  <description brief="modem_tools">
+
+     modem_tools
+
+  </description>
+  <author>Marian Andrecki</author>
+  <license>BSD</license>
+  <review status="unreviewed" notes=""/>
+  <url>http://ros.org/wiki/modem_tools</url>
+  <depend package="vehicle_interface"/>
+  <depend package="diagnostic_msgs"/>
+
+</package>
+
+
