@@ -1,0 +1,9 @@
+<launch>
+
+    <!-- start the modem -->
+    <node name="packer" pkg="modem_tools" type="payload_processor.py" output="screen">
+        <!-- set topics input and outputs -->
+        <rosparam command="load" file="$(find modem_tools)/conf/packer.yaml" />
+    </node>
+
+</launch>

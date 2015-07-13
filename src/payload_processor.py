@@ -49,57 +49,83 @@ from auv_msgs.msg import NavSts
 from vehicle_interface.msg import AcousticModemPayload, PilotRequest, String
 
 # TODO: add topics and target address as params
+# TODO: change everything to struct
+# TODO: remove the comma problem
+# TODO: add splitting of messages
+# TODO: add storage of messages waiting for ack
+# TODO: add retrying after some time
+
 # Constants
-TOPIC_BURST_OUT = '/modem/burst/out'
-TOPIC_BURST_IN = '/modem/burst/out'
+TOPICS = {
+    'modem_incoming':       '/modem/burst/out',
+    'modem_outgoing':       '/modem/burst/out',
 
-TOPIC_NAV_PACKER_PACKER = '/modem/packer/nav_sts/'
-TOPIC_NAV_UNPACKER = '/modem/unpacker/nav_sts'
-TOPIC_POSITION_REQUEST_PACKER = '/modem/packer/position_req'
-TOPIC_POSITION_REQUEST_UNPACKER = '/modem/unpacker/position_req'
-TOPIC_BODY_REQUEST_PACKER = '/modem/packer/body_req'
-TOPIC_BODY_REQUEST_UNPACKER = '/modem/unpacker/body_req'
-TOPIC_CUSTOM_PACKER = '/modem/packer/custom'
-TOPIC_CUSTOM_UNPACKER = '/modem/packer/custom'
-
-LOOP_RATE = 1  # Hz
-
-# mnemonics for message types
-PAYLOAD_PREFIX = {
-    'position_request':     'POS',
-    'body_request':         'BOD',
-    'nav':                  'NAV',
-    'custom':               'CUS',
-    'ack':                  'ACK'
+    'body_incoming':        '/modem/unpacker/body_req',
+    'body_outgoing':        '/modem/packer/body_req',
+    'position_incoming':    '/modem/unpacker/position_req',
+    'position_outgoing':    '/modem/packer/position_req',
+    'nav_incoming':         '/modem/unpacker/nav_sts/',
+    'nav_outgoing':         '/modem/packer/nav_sts/',
+    'image_string_incoming':'/modem/unpacker/image',
+    'image_string_outgoing':'/modem/packer/image',
 }
 
-# create inverse dictionary
-PAYLOAD_TYPE = {value: key for key, value in PAYLOAD_PREFIX.items()}
-
-# struct formats for message encoding/decoding
-FORMAT = {
-    'position_request':     'ffffff',  # requested pose on 6 axes
-    'body_request':         'ffffff',  # requested pose on 6 axes
-    'nav':                  'ddffffff',  # latitude, longitude, *pose
-    'custom':               'HH',  # element number, total elements
-    'ack':                  'H',  # msg id
-    'uint16':               'H',
-    'double':               'd',
-}
-
-# an ack is sent if one of these messages is received
+# messages which require ack
 REQUIRING_ACK = [
     'body_request',
     'position_request'
 ]
 
+DEFAULT_CONFIG = {
+    'topics':           TOPICS,
+    'loop_rate':        1,
+    'requiring_ack':    REQUIRING_ACK,
+    'retries':          3,  # if no ack received
+    'retry_delay':      30,  # seconds
+    'target_address':   5
+}
+
+LOOP_RATE = 1  # Hz
+
+# mapping from user friendly name to compact id (1-255)
+TYPE_TO_ID = {
+    'position_request':     1,
+    'body_request':         2,
+    'nav':                  5,
+    'image':                10,
+    'ack':                  255
+}
+
+# create inverse dictionary
+ID_TO_TYPE = {value: key for key, value in TYPE_TO_ID.items()}
+
+# struct formats for encoding/decoding parts of the payload with structs
+FORMAT = {
+    # protocol specific
+    'header':               'BH',  # payload type, msg id,
+
+    # hardcoded ROS messages
+    'position_request':     'ffffff',  # requested pose on 6 axes
+    'body_request':         'ffffff',  # requested pose on 6 axes
+    'nav':                  'ddffffff',  # latitude, longitude, *pose
+    'custom':               'HH',  # element number, total elements
+    'ack':                  'H',  # msg id
+
+    # primitives
+    'uint16':               'H',
+    'double':               'd',
+}
+
+
 TARGET_ADDRESS = 1
 
-class MessagePacker(object):
-    def __init__(self, name):
+class PackerParser(object):
+    def __init__(self, name, config):
         self.name = name
 
-        self.target_address = TARGET_ADDRESS
+        topics = config['topics']
+
+        self.target_address = config['target_address']
 
         self.msg_cnt = 0
 
@@ -112,20 +138,20 @@ class MessagePacker(object):
         }
 
         # Publishers
-        self.pub_modem = rospy.Publisher(TOPIC_BURST_OUT, AcousticModemPayload)
+        self.pub_modem = rospy.Publisher(topics['modem_incoming'], AcousticModemPayload)
 
-        self.pub_nav = rospy.Publisher(TOPIC_NAV_UNPACKER, NavSts)
-        self.pub_position = rospy.Publisher(TOPIC_POSITION_REQUEST_UNPACKER, PilotRequest)
-        self.pub_body = rospy.Publisher(TOPIC_BODY_REQUEST_UNPACKER, PilotRequest)
-        self.pub_custom = rospy.Publisher(TOPIC_CUSTOM_UNPACKER, String)
+        self.pub_nav = rospy.Publisher(topics['nav_incoming'], NavSts)
+        self.pub_position = rospy.Publisher(topics['position_incoming'], PilotRequest)
+        self.pub_body = rospy.Publisher(topics['body_incoming'], PilotRequest)
+        self.pub_image_string = rospy.Publisher(topics['image_string_incoming'], String)
 
         # Subscribers
-        self.sub_nav = rospy.Subscriber(TOPIC_NAV_PACKER_PACKER, NavSts, self.handle_nav)
-        self.sub_position = rospy.Subscriber(TOPIC_POSITION_REQUEST_PACKER, PilotRequest, self.handle_position)
-        self.sub_body = rospy.Subscriber(TOPIC_BODY_REQUEST_PACKER, PilotRequest, self.handle_body)
-        self.sub_custom = rospy.Subscriber(TOPIC_CUSTOM_PACKER, String, self.handle_custom)
+        self.sub_modem = rospy.Subscriber(topics['modem_outgoing'], AcousticModemPayload, self.handle_burst_msg)
 
-        self.sub_modem = rospy.Subscriber(TOPIC_BURST_IN, AcousticModemPayload, self.handle_burst_msg)
+        self.sub_nav = rospy.Subscriber(topics['nav_outgoing'], NavSts, self.handle_nav)
+        self.sub_position = rospy.Subscriber(topics['position_outgoing'], PilotRequest, self.handle_position)
+        self.sub_body = rospy.Subscriber(topics['body_outgoing'], PilotRequest, self.handle_body)
+        self.sub_custom = rospy.Subscriber(topics['image_string_outgoing'], String, self.handle_custom)
 
     def handle_nav(self, ros_msg):
         payload_type = 'nav'
@@ -152,7 +178,7 @@ class MessagePacker(object):
         pass
 
     def send_message(self, payload_type, payload_body, stamp, msg_id):
-        msg_prefix = PAYLOAD_PREFIX[payload_type]
+        msg_prefix = TYPE_TO_ID[payload_type]
         address = self.target_address
 
         msg_id_str = struct.pack(FORMAT['uint16'], msg_id)
@@ -178,7 +204,7 @@ class MessagePacker(object):
         tokens = msg.payload.split(',')
 
         msg_prefix = tokens[0]
-        msg_type = PAYLOAD_TYPE[msg_prefix]
+        msg_type = ID_TO_TYPE[msg_prefix]
         msg_id, = struct.unpack(FORMAT['uint16'], tokens[1])
         stamp_sec, = struct.unpack(FORMAT['double'], tokens[2])
         stamp = rospy.Time.from_sec(stamp_sec)
@@ -236,15 +262,23 @@ class MessagePacker(object):
         pass
 
 if __name__ == '__main__':
-    rospy.init_node('message_packer')
+    rospy.init_node('packer_parser')
     name = rospy.get_name()
 
-    mp = MessagePacker(name)
-    loop_rate = rospy.Rate(LOOP_RATE)
+    config = DEFAULT_CONFIG.copy()
+    # load global parameters
+    param_config = rospy.get_param('~packer_config', {})
+    # Update default settings with user specified params
+    config.update(param_config)
+
+    rospy.loginfo('%s: Loaded config is: %s' % (name, config))
+
+    pp = PackerParser(name, config)
+    loop_rate = rospy.Rate(config['loop_rate'])
 
     while not rospy.is_shutdown():
         try:
-            mp.loop()
+            pp.loop()
             loop_rate.sleep()
         except rospy.ROSInterruptException:
             rospy.loginfo('%s caught ros interrupt!', name)
