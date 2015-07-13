@@ -82,15 +82,20 @@ DEFAULT_CONFIG = {
     'target_address':   5
 }
 
-LOOP_RATE = 1  # Hz
+# types of payloads
+_POSITION_REQUEST = 'position_request'
+_BODY_REQUEST = 'body_request'
+_NAV = 'nav'
+_STRING_IMAGE = 'string_image'
+_ACK = 'ack'
 
 # mapping from user friendly name to compact id (1-255)
 TYPE_TO_ID = {
-    'position_request':     1,
-    'body_request':         2,
-    'nav':                  5,
-    'image':                10,
-    'ack':                  255
+    _POSITION_REQUEST:     1,
+    _BODY_REQUEST:         2,
+    _NAV:                  5,
+    _STRING_IMAGE:         10,
+    _ACK:                  255
 }
 
 # create inverse dictionary
@@ -100,22 +105,30 @@ ID_TO_TYPE = {value: key for key, value in TYPE_TO_ID.items()}
 FORMAT = {
     # protocol specific
     'header':               'BH',  # payload type, msg id,
+    'multi_message_header': 'HBB',  # multi message id, part number, total parts
 
     # hardcoded ROS messages
-    'position_request':     'ffffff',  # requested pose on 6 axes
-    'body_request':         'ffffff',  # requested pose on 6 axes
-    'nav':                  'ddffffff',  # latitude, longitude, *pose
-    'custom':               'HH',  # element number, total elements
-    'ack':                  'H',  # msg id
+    _POSITION_REQUEST:     'ffffff',  # requested pose on 6 axes
+    _BODY_REQUEST:         'ffffff',  # requested pose on 6 axes
+    _NAV:                  'ddffffff',  # latitude, longitude, *pose
+    _ACK:                  'H',  # msg id
 
-    # primitives
+    # ros primitives
+    'bool':                 '?',
     'uint8':                'B',
     'uint16':               'H',
-    'double':               'd',
+    'uint32':               'I',
+    'uint64':               'L',
+    'int8':                 'b',
+    'int16':                'h',
+    'int32':                'i',
+    'int64':                'l',
+    'float32':              'f',
+    'float64':              'd',
+    'string':               's',
 }
 
-
-TARGET_ADDRESS = 1
+MAX_MSG_LEN = 9000
 
 class PackerParser(object):
     def __init__(self, name, config):
@@ -125,13 +138,14 @@ class PackerParser(object):
 
         self.target_address = config['target_address']
         self.header_length = struct.calcsize(FORMAT['header'])
+        self.requiring_ack = config['requiring_ack']
         self.msg_cnt = 0
 
         self.parse = {
             'position_request':     self.parse_position_req,
             'body_request':         self.parse_body_req,
             'nav':                  self.parse_nav,
-            'custom':               self.parse_string,
+            'string_image':         self.parse_string,
             'ack':                  self.parse_ack
         }
 
@@ -152,7 +166,7 @@ class PackerParser(object):
         self.sub_string = rospy.Subscriber(topics['image_string_outgoing'], String, self.handle_string)
 
     def handle_nav(self, ros_msg):
-        payload_type = 'nav'
+        payload_type = _NAV
         payload_body = struct.pack(FORMAT[payload_type],
                                    ros_msg.global_position.latitude, ros_msg.global_position.longitude,
                                    ros_msg.position.north, ros_msg.position.north, ros_msg.position.north,
@@ -160,17 +174,20 @@ class PackerParser(object):
         self.send_message(payload_type, payload_body)
 
     def handle_body(self, ros_msg):
-        payload_type = 'body_request'
+        payload_type = _BODY_REQUEST
         payload_body = struct.pack(FORMAT[payload_type], *ros_msg.position)
         self.send_message(payload_type, payload_body)
 
     def handle_position(self, ros_msg):
-        payload_type = 'position_request'
+        payload_type = _POSITION_REQUEST
         payload_body = struct.pack(FORMAT[payload_type], *ros_msg.position)
         self.send_message(payload_type, payload_body)
 
-    def handle_string(self, msg):
-        pass
+    def handle_string(self, ros_msg):
+        payload_type = _STRING_IMAGE
+        if len(ros_msg.payload) < MAX_MSG_LEN:
+            payload_body = ros_msg.payload
+            self.send_message(payload_type, payload_body)
 
     def send_message(self, payload_type, payload_body):
         header = struct.pack(FORMAT['header'], TYPE_TO_ID[payload_type], self.msg_cnt)
@@ -188,7 +205,7 @@ class PackerParser(object):
         self.pub_modem.publish(modem_msg)
 
     def send_ack(self, msg_id):
-        payload_type = 'ack'
+        payload_type = _ACK
         payload_body = struct.pack(FORMAT[payload_type], msg_id)
         self.send_message(payload_type, payload_body)
 
@@ -204,7 +221,7 @@ class PackerParser(object):
         self.parse.get(payload_type, self.parse_unknown)(payload_type, msg_id, body)
         rospy.loginfo('%s: Received message of type %s with id %s from %s' % (self.name, payload_type, msg_id, msg.address))
 
-        if payload_type in REQUIRING_ACK:
+        if payload_type in self.requiring_ack:
             self.send_ack(msg_id)
 
     def parse_nav(self, payload_type, id, body):
@@ -233,9 +250,8 @@ class PackerParser(object):
 
         self.pub_body.publish(pilot_msg)
 
-    # TODO: finish custom msg
     def parse_string(self, payload_type, id, payload):
-        pass
+        self.pub_string.publish(String(image=payload))
 
     def parse_ack(self, payload_type, id, body):
         rospy.loginfo('%s: Message with id %s was delivered' % (self.name, id))

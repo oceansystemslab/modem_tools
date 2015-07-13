@@ -40,8 +40,6 @@ from __future__ import division
 
 import numpy as np
 import cv2
-import Image
-import zlib
 import roslib
 roslib.load_manifest('modem_tools')
 
@@ -55,11 +53,12 @@ from vehicle_interface.msg import String
 from vehicle_interface.srv import BooleanService, BooleanServiceResponse
 
 # Constants
-TOPIC_MODEM_CONSTRUCTOR = '/modem/constructor'
+TOPIC_MODEM_CONSTRUCTOR = '/modem/packer/image'
 SRV_SIGNAL = '/image_packer/signal'
-LOOP_RATE = 0.2  # Hz
+LOOP_RATE = 0.1  # Hz
 
 MAX_SIZE = 128*128  # pixels
+QUALITY = 50  # from 0 (worst) to 100
 
 class ImagePacker(object):
     def __init__(self, name):
@@ -87,26 +86,19 @@ class ImagePacker(object):
         im = cv2.resize(im, (0, 0), fx=scale, fy=scale)
         shape = im.shape
 
-        im = im.flatten()
+        success, im = cv2.imencode('.jpg', im, [cv2.IMWRITE_JPEG_QUALITY, QUALITY])
+
         # first two bytes are dimensions of the image
-        s = chr(shape[0]) + chr(shape[1])
-        for pixel in im:
-            s += chr(pixel)
+        s = ''
+        for value in im:
+            s += chr(value)
 
-        s_comp = zlib.compress(s, 9)
-
-        rospy.loginfo('%s: Image shape: %s, %s' % (self.name, shape[0], shape[1]))
-        rospy.loginfo('%s: String length: %s' % (self.name, len(s_comp)))
-        rospy.loginfo('%s: Compression: %s%%' % (self.name, 100*(1 - len(s_comp)/len(s))))
-        return s_comp
-
-    # def get_string_Image(self):
-    #     im = Image.open('diver.jpg')
-    #     im.
+        rospy.loginfo('%s: Image length: %s' % (self.name, len(s)))
+        return s
 
     def publish_image(self):
         s = self.generate_image_string()
-        self.pub_modem.publish(String(image=s))
+        self.pub_modem.publish(String(header=rospy.Time.now(), payload=s))
 
     def loop(self):
         if self.go:

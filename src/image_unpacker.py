@@ -55,7 +55,7 @@ from vehicle_interface.msg import String
 from vehicle_interface.srv import BooleanService, BooleanServiceResponse
 
 # Constants
-TOPIC_MODEM_CONSTRUCTOR = '/modem/constructor'
+TOPIC_MODEM_CONSTRUCTOR = '/modem/unpacker/image'
 SRV_SIGNAL = '/image_packer/signal'
 LOOP_RATE = 1  # Hz
 
@@ -73,17 +73,11 @@ class ImageUnpacker(object):
     def handle_image(self, msg):
         rospy.loginfo('Image!')
 
-        s = zlib.decompress(msg.image)
+        im = np.zeros(len(msg.payload)).astype(np.uint8)
+        for i, value in enumerate(msg.payload):
+            im[i] = ord(value)
 
-        rows = ord(s[0])
-        cols = ord(s[1])
-        s = s[2:]
-
-        im = np.zeros((rows * cols)).astype(np.uint8)
-        for i in range(rows * cols):
-            im[i] = ord(s[i])
-
-        im = im.reshape((rows, cols))
+        im = cv2.imdecode(im, cv2.CV_LOAD_IMAGE_GRAYSCALE)
 
         larger = cv2.resize(im, (0,0), fx=3, fy=3)
         cv2.imshow('image', larger)
