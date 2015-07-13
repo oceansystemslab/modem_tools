@@ -48,9 +48,6 @@ import rospy
 from auv_msgs.msg import NavSts
 from vehicle_interface.msg import AcousticModemPayload, PilotRequest, String
 
-# TODO: add topics and target address as params
-# TODO: change everything to struct
-# TODO: remove the comma problem
 # TODO: add splitting of messages
 # TODO: add storage of messages waiting for ack
 # TODO: add retrying after some time
@@ -112,6 +109,7 @@ FORMAT = {
     'ack':                  'H',  # msg id
 
     # primitives
+    'uint8':                'B',
     'uint16':               'H',
     'double':               'd',
 }
@@ -126,14 +124,14 @@ class PackerParser(object):
         topics = config['topics']
 
         self.target_address = config['target_address']
-
+        self.header_length = struct.calcsize(FORMAT['header'])
         self.msg_cnt = 0
 
         self.parse = {
             'position_request':     self.parse_position_req,
             'body_request':         self.parse_body_req,
             'nav':                  self.parse_nav,
-            'custom':               self.parse_custom,
+            'custom':               self.parse_string,
             'ack':                  self.parse_ack
         }
 
@@ -143,7 +141,7 @@ class PackerParser(object):
         self.pub_nav = rospy.Publisher(topics['nav_incoming'], NavSts)
         self.pub_position = rospy.Publisher(topics['position_incoming'], PilotRequest)
         self.pub_body = rospy.Publisher(topics['body_incoming'], PilotRequest)
-        self.pub_image_string = rospy.Publisher(topics['image_string_incoming'], String)
+        self.pub_string = rospy.Publisher(topics['image_string_incoming'], String)
 
         # Subscribers
         self.sub_modem = rospy.Subscriber(topics['modem_outgoing'], AcousticModemPayload, self.handle_burst_msg)
@@ -151,7 +149,7 @@ class PackerParser(object):
         self.sub_nav = rospy.Subscriber(topics['nav_outgoing'], NavSts, self.handle_nav)
         self.sub_position = rospy.Subscriber(topics['position_outgoing'], PilotRequest, self.handle_position)
         self.sub_body = rospy.Subscriber(topics['body_outgoing'], PilotRequest, self.handle_body)
-        self.sub_custom = rospy.Subscriber(topics['image_string_outgoing'], String, self.handle_custom)
+        self.sub_string = rospy.Subscriber(topics['image_string_outgoing'], String, self.handle_string)
 
     def handle_nav(self, ros_msg):
         payload_type = 'nav'
@@ -159,100 +157,87 @@ class PackerParser(object):
                                    ros_msg.global_position.latitude, ros_msg.global_position.longitude,
                                    ros_msg.position.north, ros_msg.position.north, ros_msg.position.north,
                                    ros_msg.orientation.roll, ros_msg.orientation.pitch, ros_msg.orientation.yaw)
-        self.send_message(payload_type, payload_body, ros_msg.header.stamp.to_sec(), self.msg_cnt)
-        self.msg_cnt += 1
+        self.send_message(payload_type, payload_body)
 
     def handle_body(self, ros_msg):
         payload_type = 'body_request'
         payload_body = struct.pack(FORMAT[payload_type], *ros_msg.position)
-        self.send_message(payload_type, payload_body, ros_msg.header.stamp.to_sec(), self.msg_cnt)
-        self.msg_cnt += 1
+        self.send_message(payload_type, payload_body)
 
     def handle_position(self, ros_msg):
         payload_type = 'position_request'
         payload_body = struct.pack(FORMAT[payload_type], *ros_msg.position)
-        self.send_message(payload_type, payload_body, ros_msg.header.stamp.to_sec(), self.msg_cnt)
-        self.msg_cnt += 1
+        self.send_message(payload_type, payload_body)
 
-    def handle_custom(self, msg):
+    def handle_string(self, msg):
         pass
 
-    def send_message(self, payload_type, payload_body, stamp, msg_id):
-        msg_prefix = TYPE_TO_ID[payload_type]
-        address = self.target_address
+    def send_message(self, payload_type, payload_body):
+        header = struct.pack(FORMAT['header'], TYPE_TO_ID[payload_type], self.msg_cnt)
 
-        msg_id_str = struct.pack(FORMAT['uint16'], msg_id)
-        stamp_str = struct.pack(FORMAT['double'], stamp)
-
-        payload = '{0},{1},{2},{3}'.format(msg_prefix, msg_id_str, stamp_str, payload_body)
-        rospy.loginfo('%s: Sending message of type %s with id %s to %s' % (self.name, payload_type, msg_id, address))
+        payload = '{0}{1}'.format(header, payload_body)
+        rospy.loginfo('%s: Sending message of type %s with id %s to %s' % (self.name, payload_type, self.msg_cnt, self.target_address))
         # rospy.loginfo('%s: Message payload: %s' % (self.name, repr(payload)))
+        self.msg_cnt += 1
 
         modem_msg = AcousticModemPayload()
         modem_msg.header.stamp = rospy.Time.now()
-        modem_msg.address = address
+        modem_msg.address = self.target_address
         modem_msg.payload = payload
 
         self.pub_modem.publish(modem_msg)
 
     def send_ack(self, msg_id):
         payload_type = 'ack'
-        payload_body = ''
-        self.send_message(payload_type, payload_body, rospy.Time.now().to_sec(), msg_id)
+        payload_body = struct.pack(FORMAT[payload_type], msg_id)
+        self.send_message(payload_type, payload_body)
 
     def handle_burst_msg(self, msg):
-        tokens = msg.payload.split(',')
+        header = msg.payload[:self.header_length]
+        body = msg.payload[self.header_length:]
 
-        msg_prefix = tokens[0]
-        msg_type = ID_TO_TYPE[msg_prefix]
-        msg_id, = struct.unpack(FORMAT['uint16'], tokens[1])
-        stamp_sec, = struct.unpack(FORMAT['double'], tokens[2])
-        stamp = rospy.Time.from_sec(stamp_sec)
-        payload = ''.join(tokens[3:])
+        header_values = struct.unpack(FORMAT['header'], header)
 
-        self.parse.get(msg_type, self.parse_unknown)(msg_type, msg_id, stamp, payload)
-        rospy.loginfo('%s: Received message of type %s with id %s from %s' % (self.name, msg_type, msg_id, msg.address))
+        payload_type = ID_TO_TYPE[header_values[0]]
+        msg_id = header_values[1]
 
-        if msg_type in REQUIRING_ACK:
+        self.parse.get(payload_type, self.parse_unknown)(payload_type, msg_id, body)
+        rospy.loginfo('%s: Received message of type %s with id %s from %s' % (self.name, payload_type, msg_id, msg.address))
+
+        if payload_type in REQUIRING_ACK:
             self.send_ack(msg_id)
 
-    def parse_nav(self, msg_type, id, stamp, payload):
-        values = struct.unpack(FORMAT[msg_type], payload)
+    def parse_nav(self, payload_type, id, body):
+        values = struct.unpack(FORMAT[payload_type], body)
 
         nav_msg = NavSts()
-        nav_msg.header.stamp = stamp
         nav_msg.global_position.latitude, nav_msg.global_position.longitude = values[0:2]
         nav_msg.position.north, nav_msg.position.east, nav_msg.position.depth = values[2:5]
         nav_msg.orientation.roll, nav_msg.orientation.pitch, nav_msg.orientation.yaw = values[5:8]
 
         self.pub_nav.publish(nav_msg)
 
-    def parse_position_req(self, msg_type, id, stamp, payload):
-        values = struct.unpack(FORMAT[msg_type], payload)
+    def parse_position_req(self, payload_type, id, body):
+        values = struct.unpack(FORMAT[payload_type], body)
 
         pilot_msg = PilotRequest()
-        pilot_msg.header.stamp = stamp
         pilot_msg.position = list(values[0:6])
 
         self.pub_position.publish(pilot_msg)
 
-    def parse_body_req(self, msg_type, id, stamp, payload):
-        values = struct.unpack(FORMAT[msg_type], payload)
+    def parse_body_req(self, payload_type, id, body):
+        values = struct.unpack(FORMAT[payload_type], body)
 
         pilot_msg = PilotRequest()
-        pilot_msg.header.stamp = stamp
         pilot_msg.position = list(values[0:6])
 
         self.pub_body.publish(pilot_msg)
 
     # TODO: finish custom msg
-    def parse_custom(self, msg_type, id, payload):
-        tokens = payload.split(',')
-        header = tokens[0]
-        body = ''.join(tokens[1:])
-        element_number, total_elements = struct.unpack(FORMAT[msg_type], header)
+    def parse_string(self, payload_type, id, payload):
+        pass
 
-    def parse_ack(self, msg_type, id, stamp, payload):
+    def parse_ack(self, payload_type, id, body):
         rospy.loginfo('%s: Message with id %s was delivered' % (self.name, id))
 
     def parse_unknown(self):
