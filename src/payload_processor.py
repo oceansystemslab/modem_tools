@@ -44,11 +44,15 @@ roslib.load_manifest('modem_tools')
 
 import rospy
 
+import message_config as mc
+
 # Messages
 from auv_msgs.msg import NavSts
-from vehicle_interface.msg import AcousticModemPayload, PilotRequest, String
+from diagnostic_msgs.msg import KeyValue
+from vehicle_interface.msg import AcousticModemPayload, PilotRequest, String, NodeStatus
 
 # TODO: add splitting of messages
+# TODO: add bandwidth tracking
 # TODO: add storage of messages waiting for ack
 # TODO: add retrying after some time
 # TODO: add general message sending
@@ -75,6 +79,8 @@ TOPICS = {
     'nav_outgoing':         '/modem/packer/nav_sts/',
     'image_string_incoming':'/modem/unpacker/image',
     'image_string_outgoing':'/modem/packer/image',
+
+    'node_status':          '/modem/unpacker/status'
 }
 
 # messages which require ack
@@ -113,7 +119,7 @@ ID_TO_TYPE = {value: key for key, value in TYPE_TO_ID.items()}
 # struct formats for encoding/decoding parts of the messages
 FORMAT = {
     # protocol specific
-    'header':               'BH',  # payload type, msg id,
+    'header':               'BHd',  # payload type, msg id,
     'multi_message_header': 'HBB',  # multi message id, part number, total parts
 
     # hardcoded ROS messages
@@ -126,15 +132,18 @@ FORMAT = {
 MAX_MSG_LEN = 9000
 
 class PackerParser(object):
-    def __init__(self, name, config):
+    def __init__(self, name, config, outgoing, incoming):
         self.name = name
 
         topics = config['topics']
-
         self.target_address = config['target_address']
         self.header_length = struct.calcsize(FORMAT['header'])
         self.requiring_ack = config['requiring_ack']
-        self.msg_cnt = 0
+        self.outgoing = outgoing
+        self.incoming = incoming
+
+        self.msg_out_cnt = 0
+        self.msg_in_cnt = 0
 
         self.parse = {
             'position_request':     self.parse_position_req,
@@ -152,6 +161,13 @@ class PackerParser(object):
         self.pub_body = rospy.Publisher(topics['body_incoming'], PilotRequest)
         self.pub_string = rospy.Publisher(topics['image_string_incoming'], String)
 
+        # publishers for incoming general messages (based on the description in config)
+        # maps from topic id to publisher
+        self.pub_incoming = {mc.TOPIC_STRING_TO_ID[gm['publish_topic']]:
+                                 rospy.Publisher(gm['publish_topic'], gm['message_type']) for gm in incoming}
+
+        self.pub_status = rospy.Publisher(topics['node_status'], NodeStatus)
+
         # Subscribers
         self.sub_modem = rospy.Subscriber(topics['modem_outgoing'], AcousticModemPayload, self.handle_burst_msg)
 
@@ -159,6 +175,12 @@ class PackerParser(object):
         self.sub_position = rospy.Subscriber(topics['position_outgoing'], PilotRequest, self.handle_position)
         self.sub_body = rospy.Subscriber(topics['body_outgoing'], PilotRequest, self.handle_body)
         self.sub_string = rospy.Subscriber(topics['image_string_outgoing'], String, self.handle_string)
+
+        # subscribers for outgoing general messages (based on the description in config)
+        self.sub_outgoing = [rospy.Subscriber(gm['subscribe_topic'],
+                                              gm['message_type'],
+                                              self.parse_general,
+                                              gm['publish_topic']) for gm in outgoing]
 
     def handle_nav(self, ros_msg):
         payload_type = _NAV
@@ -185,12 +207,12 @@ class PackerParser(object):
             self.send_message(payload_type, payload_body)
 
     def send_message(self, payload_type, payload_body):
-        header = struct.pack(FORMAT['header'], TYPE_TO_ID[payload_type], self.msg_cnt)
+        header = struct.pack(FORMAT['header'], TYPE_TO_ID[payload_type], self.msg_out_cnt, rospy.Time.now().to_sec())
 
         payload = '{0}{1}'.format(header, payload_body)
-        rospy.loginfo('%s: Sending message of type %s with id %s to %s' % (self.name, payload_type, self.msg_cnt, self.target_address))
+        rospy.loginfo('%s: Sending message of type %s with id %s to %s' % (self.name, payload_type, self.msg_out_cnt, self.target_address))
         # rospy.loginfo('%s: Message payload: %s' % (self.name, repr(payload)))
-        self.msg_cnt += 1
+        self.msg_out_cnt += 1
 
         modem_msg = AcousticModemPayload()
         modem_msg.header.stamp = rospy.Time.now()
@@ -212,6 +234,24 @@ class PackerParser(object):
 
         payload_type = ID_TO_TYPE[header_values[0]]
         msg_id = header_values[1]
+        time_sent = header_values[2]
+        time_received = rospy.Time.now().to_sec()
+
+        self.msg_in_cnt += 1
+        info = {
+            'time_sent': time_sent,
+            'time_received': time_received,
+            'length': len(msg.payload),
+            'speed': len(msg.payload)/(time_received - time_sent),
+            'msg_in_cnt': self.msg_in_cnt
+        }
+
+        ns = NodeStatus()
+        ns.header.stamp = rospy.Time.now()
+        ns.node = self.name
+        ns.message = msg.payload
+        ns.info = [KeyValue(key, value) for key, value in info.items]
+        self.pub_status.publish(ns)
 
         self.parse.get(payload_type, self.parse_unknown)(payload_type, msg_id, body)
         rospy.loginfo('%s: Received message of type %s with id %s from %s' % (self.name, payload_type, msg_id, msg.address))
@@ -252,6 +292,9 @@ class PackerParser(object):
         rospy.loginfo('%s: Message with id %s was delivered' % (self.name, id))
 
     def parse_unknown(self):
+        raise KeyError()
+
+    def parse_general(self):
         pass
 
     def loop(self):
@@ -270,13 +313,11 @@ if __name__ == '__main__':
     general_outgoing = rospy.get_param('~general_messages_outgoing', {})
     general_incoming = rospy.get_param('~general_messages_incoming', {})
 
-    for i in general_incoming:
-        print type(i)
-        print i
-
     rospy.loginfo('%s: Loaded config is: %s' % (name, config))
+    rospy.loginfo('%s: Outgoing messages are: %s' % (name, general_outgoing))
+    rospy.loginfo('%s: Incoming messages are: %s' % (name, general_incoming))
 
-    pp = PackerParser(name, config)
+    pp = PackerParser(name, config, general_outgoing, general_incoming)
     loop_rate = rospy.Rate(config['loop_rate'])
 
     while not rospy.is_shutdown():
