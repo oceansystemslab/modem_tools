@@ -121,20 +121,6 @@ FORMAT = {
     _BODY_REQUEST:         'ffffff',  # requested pose on 6 axes
     _NAV:                  'ddffffff',  # latitude, longitude, *pose
     _ACK:                  'H',  # msg id
-
-    # ros primitives
-    'bool':                 '?',
-    'uint8':                'B',
-    'uint16':               'H',
-    'uint32':               'I',
-    'uint64':               'L',
-    'int8':                 'b',
-    'int16':                'h',
-    'int32':                'i',
-    'int64':                'l',
-    'float32':              'f',
-    'float64':              'd',
-    'string':               's',
 }
 
 MAX_MSG_LEN = 9000
@@ -280,6 +266,13 @@ if __name__ == '__main__':
     param_config = rospy.get_param('~packer_config', {})
     # Update default settings with user specified params
     config.update(param_config)
+
+    general_outgoing = rospy.get_param('~general_messages_outgoing', {})
+    general_incoming = rospy.get_param('~general_messages_incoming', {})
+
+    for i in general_incoming:
+        print type(i)
+        print i
 
     rospy.loginfo('%s: Loaded config is: %s' % (name, config))
 

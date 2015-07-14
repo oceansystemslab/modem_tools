@@ -1,0 +1,10 @@
+# a list of dictionaries describing messages that will arrive to the packer and will be
+# sent to a remote modem
+general_messages_outgoing:
+    -   subscribe_topic:    '/pilot/body_req' 
+        publish_topic:      '/pilot/body_req'
+        message_type:       'PilotRequest'
+    -   subscribe_topic:    '/pilot/position_req'
+        publish_topic:      '/pilot/position_req'
+        message_type:       'PilotRequest'
+    

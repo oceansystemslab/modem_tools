@@ -1,0 +1,8 @@
+# a list of dictionaries describing messages that will arrive over the modem and need to
+# be published to specific topics.
+general_messages_incoming:
+    -   publish_topic:  '/pilot/body_req'
+        message_type:   'PilotRequest'
+    -   publish_topic:  '/pilot/position_req'
+        message_type:   'PilotRequest'
+    
