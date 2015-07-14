@@ -51,6 +51,16 @@ from vehicle_interface.msg import AcousticModemPayload, PilotRequest, String
 # TODO: add splitting of messages
 # TODO: add storage of messages waiting for ack
 # TODO: add retrying after some time
+# TODO: add general message sending
+
+# types of payloads
+_POSITION_REQUEST = 'position_request'
+_BODY_REQUEST = 'body_request'
+_NAV = 'nav'
+_STRING_IMAGE = 'string_image'
+_ACK = 'ack'
+_ROS_MESSAGE = 'ros_message'
+_ROS_SERVICE = 'ros_service'
 
 # Constants
 TOPICS = {
@@ -69,8 +79,8 @@ TOPICS = {
 
 # messages which require ack
 REQUIRING_ACK = [
-    'body_request',
-    'position_request'
+    _POSITION_REQUEST,
+    _BODY_REQUEST
 ]
 
 DEFAULT_CONFIG = {
@@ -82,26 +92,25 @@ DEFAULT_CONFIG = {
     'target_address':   5
 }
 
-# types of payloads
-_POSITION_REQUEST = 'position_request'
-_BODY_REQUEST = 'body_request'
-_NAV = 'nav'
-_STRING_IMAGE = 'string_image'
-_ACK = 'ack'
 
 # mapping from user friendly name to compact id (1-255)
 TYPE_TO_ID = {
-    _POSITION_REQUEST:     1,
-    _BODY_REQUEST:         2,
-    _NAV:                  5,
-    _STRING_IMAGE:         10,
-    _ACK:                  255
+    # fixed messages
+    _POSITION_REQUEST:      1,
+    _BODY_REQUEST:          2,
+    _NAV:                   5,
+    _STRING_IMAGE:          10,
+    _ACK:                   32,
+
+    # general messages described in the config
+    _ROS_MESSAGE:           100,
+    _ROS_SERVICE:           101,
 }
 
 # create inverse dictionary
 ID_TO_TYPE = {value: key for key, value in TYPE_TO_ID.items()}
 
-# struct formats for encoding/decoding parts of the payload with structs
+# struct formats for encoding/decoding parts of the messages
 FORMAT = {
     # protocol specific
     'header':               'BH',  # payload type, msg id,
