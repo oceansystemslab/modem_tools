@@ -39,10 +39,12 @@
 from __future__ import division
 
 import struct
+import math
+import collections
+import rospy
 import roslib
 roslib.load_manifest('modem_tools')
 
-import rospy
 
 import message_config as mc
 
@@ -51,11 +53,9 @@ from auv_msgs.msg import NavSts
 from diagnostic_msgs.msg import KeyValue
 from vehicle_interface.msg import AcousticModemPayload, PilotRequest, String, NodeStatus
 
-# TODO: add splitting of messages
-# TODO: add bandwidth tracking
+# TODO: add general message sending
 # TODO: add storage of messages waiting for ack
 # TODO: add retrying after some time
-# TODO: add general message sending
 
 # types of payloads
 _POSITION_REQUEST = 'position_request'
@@ -63,10 +63,15 @@ _BODY_REQUEST = 'body_request'
 _NAV = 'nav'
 _STRING_IMAGE = 'string_image'
 _ACK = 'ack'
+_MULTI_MESSAGE = 'multi_message'
 _ROS_MESSAGE = 'ros_message'
 _ROS_SERVICE = 'ros_service'
 
-# Constants
+# other strings
+HEADER = 'header'
+MM_HEADER = 'multi_message_header'
+
+# default topics
 TOPICS = {
     'modem_incoming':       '/modem/burst/out',
     'modem_outgoing':       '/modem/burst/out',
@@ -91,7 +96,7 @@ REQUIRING_ACK = [
 
 DEFAULT_CONFIG = {
     'topics':           TOPICS,
-    'loop_rate':        1,
+    'loop_rate':        4,  # Hz
     'requiring_ack':    REQUIRING_ACK,
     'retries':          3,  # if no ack received
     'retry_delay':      30,  # seconds
@@ -106,11 +111,13 @@ TYPE_TO_ID = {
     _BODY_REQUEST:          2,
     _NAV:                   5,
     _STRING_IMAGE:          10,
-    _ACK:                   32,
 
     # general messages described in the config
-    _ROS_MESSAGE:           100,
-    _ROS_SERVICE:           101,
+    _ROS_MESSAGE:           128,
+    _ROS_SERVICE:           129,
+    _MULTI_MESSAGE:         130,
+    _ACK:                   255,
+
 }
 
 # create inverse dictionary
@@ -119,17 +126,18 @@ ID_TO_TYPE = {value: key for key, value in TYPE_TO_ID.items()}
 # struct formats for encoding/decoding parts of the messages
 FORMAT = {
     # protocol specific
-    'header':               'BHd',  # payload type, msg id,
-    'multi_message_header': 'HBB',  # multi message id, part number, total parts
+    HEADER:                'BHd',  # payload type, msg id,
+    MM_HEADER:             'HBB',  # multi message id, part number, total parts
 
     # hardcoded ROS messages
-    _POSITION_REQUEST:     'ffffff',  # requested pose on 6 axes
-    _BODY_REQUEST:         'ffffff',  # requested pose on 6 axes
-    _NAV:                  'ddffffff',  # latitude, longitude, *pose
-    _ACK:                  'H',  # msg id
+    _POSITION_REQUEST:      'ffffff',  # requested pose on 6 axes
+    _BODY_REQUEST:          'ffffff',  # requested pose on 6 axes
+    _NAV:                   'ddffffff',  # latitude, longitude, *pose
+    _ACK:                   'H',  # msg id
 }
 
-MAX_MSG_LEN = 9000
+MAX_MSG_LEN = 1000
+MAX_MULTI_MSG_LEN = MAX_MSG_LEN - (struct.calcsize(FORMAT[HEADER]) + struct.calcsize(FORMAT[MM_HEADER]))
 
 class PackerParser(object):
     def __init__(self, name, config, outgoing, incoming):
@@ -137,20 +145,25 @@ class PackerParser(object):
 
         topics = config['topics']
         self.target_address = config['target_address']
-        self.header_length = struct.calcsize(FORMAT['header'])
+        # self.header_length = struct.calcsize(FORMAT[_HEADER])
         self.requiring_ack = config['requiring_ack']
-        self.outgoing = outgoing
-        self.incoming = incoming
 
         self.msg_out_cnt = 0
         self.msg_in_cnt = 0
+        self.multi_msg_out_cnt = 0
+
+        self.multi_msgs_out = {}
+        self.multi_msgs_in = {}
+        self.multi_msgs_in_times = {}
+        self.outgoing_msg_buffer = collections.deque()
 
         self.parse = {
-            'position_request':     self.parse_position_req,
-            'body_request':         self.parse_body_req,
-            'nav':                  self.parse_nav,
-            'string_image':         self.parse_string,
-            'ack':                  self.parse_ack
+            _POSITION_REQUEST:     self.parse_position_req,
+            _BODY_REQUEST:         self.parse_body_req,
+            _NAV:                  self.parse_nav,
+            _STRING_IMAGE:         self.parse_string,
+            _ACK:                  self.parse_ack,
+            _MULTI_MESSAGE:        self.parse_multi_message,
         }
 
         # Publishers
@@ -164,7 +177,7 @@ class PackerParser(object):
         # publishers for incoming general messages (based on the description in config)
         # maps from topic id to publisher
         self.pub_incoming = {mc.TOPIC_STRING_TO_ID[gm['publish_topic']]:
-                                 rospy.Publisher(gm['publish_topic'], gm['message_type']) for gm in incoming}
+                                 rospy.Publisher(gm['publish_topic'], mc.ros_msg_string2type(gm['message_type'])) for gm in incoming}
 
         self.pub_status = rospy.Publisher(topics['node_status'], NodeStatus)
 
@@ -178,7 +191,7 @@ class PackerParser(object):
 
         # subscribers for outgoing general messages (based on the description in config)
         self.sub_outgoing = [rospy.Subscriber(gm['subscribe_topic'],
-                                              gm['message_type'],
+                                              mc.ros_msg_string2type(gm['message_type']),
                                               self.parse_general,
                                               gm['publish_topic']) for gm in outgoing]
 
@@ -188,49 +201,70 @@ class PackerParser(object):
                                    ros_msg.global_position.latitude, ros_msg.global_position.longitude,
                                    ros_msg.position.north, ros_msg.position.north, ros_msg.position.north,
                                    ros_msg.orientation.roll, ros_msg.orientation.pitch, ros_msg.orientation.yaw)
-        self.send_message(payload_type, payload_body)
+        self.construct_and_buffer(payload_type, payload_body)
 
     def handle_body(self, ros_msg):
         payload_type = _BODY_REQUEST
         payload_body = struct.pack(FORMAT[payload_type], *ros_msg.position)
-        self.send_message(payload_type, payload_body)
+        self.construct_and_buffer(payload_type, payload_body)
 
     def handle_position(self, ros_msg):
         payload_type = _POSITION_REQUEST
         payload_body = struct.pack(FORMAT[payload_type], *ros_msg.position)
-        self.send_message(payload_type, payload_body)
+        self.construct_and_buffer(payload_type, payload_body)
 
     def handle_string(self, ros_msg):
         payload_type = _STRING_IMAGE
-        if len(ros_msg.payload) < MAX_MSG_LEN:
-            payload_body = ros_msg.payload
-            self.send_message(payload_type, payload_body)
+        payload_body = ros_msg.payload
+        self.construct_and_buffer(payload_type, payload_body)
 
-    def send_message(self, payload_type, payload_body):
-        header = struct.pack(FORMAT['header'], TYPE_TO_ID[payload_type], self.msg_out_cnt, rospy.Time.now().to_sec())
-
-        payload = '{0}{1}'.format(header, payload_body)
-        rospy.loginfo('%s: Sending message of type %s with id %s to %s' % (self.name, payload_type, self.msg_out_cnt, self.target_address))
-        # rospy.loginfo('%s: Message payload: %s' % (self.name, repr(payload)))
+    def construct_and_buffer(self, payload_type, payload_body):
+        header = struct.pack(FORMAT[HEADER], TYPE_TO_ID[payload_type], self.msg_out_cnt, rospy.Time.now().to_sec())
         self.msg_out_cnt += 1
 
-        modem_msg = AcousticModemPayload()
-        modem_msg.header.stamp = rospy.Time.now()
-        modem_msg.address = self.target_address
-        modem_msg.payload = payload
+        payload = '{0}{1}'.format(header, payload_body)
 
-        self.pub_modem.publish(modem_msg)
+        if len(payload) > MAX_MSG_LEN:
+            self.generate_multi_message(payload)
+            return
+
+        self.outgoing_msg_buffer.appendleft(payload)
 
     def send_ack(self, msg_id):
         payload_type = _ACK
         payload_body = struct.pack(FORMAT[payload_type], msg_id)
-        self.send_message(payload_type, payload_body)
+        self.construct_and_buffer(payload_type, payload_body)
+
+    def generate_multi_message(self, content):
+        payload_type = _MULTI_MESSAGE
+        total_parts = int(math.ceil(len(content) / MAX_MULTI_MSG_LEN))
+        mean_length = int(math.ceil(len(content)/total_parts))
+
+        msg_list = []
+
+        for i in range(total_parts):
+            header = struct.pack(FORMAT[HEADER], TYPE_TO_ID[payload_type], self.msg_out_cnt, rospy.Time.now().to_sec())
+            self.msg_out_cnt += 1
+            multi_msg_header = struct.pack(FORMAT[MM_HEADER], self.multi_msg_out_cnt, i, total_parts)
+            content_section = content[i*mean_length: (i+1)*mean_length]
+
+            payload = '{0}{1}{2}'.format(header, multi_msg_header, content_section)
+            msg_list.append(payload)
+
+        self.multi_msgs_out.update({self.multi_msg_out_cnt: msg_list})
+        self.multi_msg_out_cnt += 1
+
+        for msg in msg_list:
+            self.outgoing_msg_buffer.appendleft(msg)
 
     def handle_burst_msg(self, msg):
-        header = msg.payload[:self.header_length]
-        body = msg.payload[self.header_length:]
+        self.parse_top_level(msg.payload, msg.address)
 
-        header_values = struct.unpack(FORMAT['header'], header)
+    def parse_top_level(self, payload, address):
+        header = payload[:struct.calcsize(FORMAT[HEADER])]
+        body = payload[struct.calcsize(FORMAT[HEADER]):]
+
+        header_values = struct.unpack(FORMAT[HEADER], header)
 
         payload_type = ID_TO_TYPE[header_values[0]]
         msg_id = header_values[1]
@@ -241,20 +275,20 @@ class PackerParser(object):
         info = {
             'time_sent': time_sent,
             'time_received': time_received,
-            'length': len(msg.payload),
-            'speed': len(msg.payload)/(time_received - time_sent),
+            'length': len(payload),
+            'speed_bps': len(payload)*8/(time_received - time_sent),
             'msg_in_cnt': self.msg_in_cnt
         }
 
         ns = NodeStatus()
         ns.header.stamp = rospy.Time.now()
         ns.node = self.name
-        ns.message = msg.payload
-        ns.info = [KeyValue(key, value) for key, value in info.items]
+        ns.message = payload
+        ns.info = [KeyValue(key, str(value)) for key, value in info.items()]
         self.pub_status.publish(ns)
 
         self.parse.get(payload_type, self.parse_unknown)(payload_type, msg_id, body)
-        rospy.loginfo('%s: Received message of type %s with id %s from %s' % (self.name, payload_type, msg_id, msg.address))
+        rospy.loginfo('%s: Received message of type %s with id %s from %s' % (self.name, payload_type, msg_id, address))
 
         if payload_type in self.requiring_ack:
             self.send_ack(msg_id)
@@ -285,20 +319,59 @@ class PackerParser(object):
 
         self.pub_body.publish(pilot_msg)
 
-    def parse_string(self, payload_type, id, payload):
-        self.pub_string.publish(String(image=payload))
+    def parse_string(self, payload_type, id, body):
+        self.pub_string.publish(String(payload=body))
 
     def parse_ack(self, payload_type, id, body):
-        rospy.loginfo('%s: Message with id %s was delivered' % (self.name, id))
+        values = struct.unpack(FORMAT[payload_type], body)
+        rospy.loginfo('%s: Message with id %s was delivered' % (self.name, values[0]))
 
-    def parse_unknown(self):
-        raise KeyError()
+    def parse_multi_message(self, payload_type, id, body):
+        multi_msg_header = struct.unpack(FORMAT[MM_HEADER], body[:struct.calcsize(FORMAT[MM_HEADER])])
+        content = body[struct.calcsize(FORMAT[MM_HEADER]):]
+        multi_msg_id, part, total_parts = multi_msg_header
 
-    def parse_general(self):
+        if multi_msg_id not in self.multi_msgs_in.keys():
+            msg_list = [False for i in range(total_parts)]
+            self.multi_msgs_in.update({multi_msg_id: msg_list})
+
+        self.multi_msgs_in[multi_msg_id][part] = content
+        self.multi_msgs_in_times.update({multi_msg_id: rospy.Time.now().to_sec()})
+        self.check_mm_completeness()
+
+    def check_mm_completeness(self):
+        for mm_id, msg_list in self.multi_msgs_in.items():
+            if all(msg_list):
+                complete_msg = ''.join(msg_list)
+                self.parse_top_level(complete_msg, -1)
+                self.multi_msgs_in.pop(mm_id)
+
+    def parse_unknown(self, payload_type, id, body):
+        rospy.logwarn('%s: Message of unknown type %s with id %s was delivered' % (self.name, payload_type, id))
+        # raise KeyError()
+
+    def parse_general(self, payload_type, id, body):
         pass
+
+    def send_from_buffer(self):
+        if len(self.outgoing_msg_buffer) == 0:
+            return
+
+        payload = self.outgoing_msg_buffer.pop()
+        header = struct.unpack(FORMAT[HEADER], payload[:struct.calcsize(FORMAT[HEADER])])
+
+        rospy.loginfo('%s: Sending message of type %s with id %s to %s' % (self.name, ID_TO_TYPE[header[0]], header[1], self.target_address))
+        # rospy.loginfo('%s: Message payload: %s' % (self.name, repr(payload)))
+
+        modem_msg = AcousticModemPayload()
+        modem_msg.header.stamp = rospy.Time.now()
+        modem_msg.address = self.target_address
+        modem_msg.payload = payload
+
+        self.pub_modem.publish(modem_msg)
 
     def loop(self):
-        pass
+        self.send_from_buffer()
 
 if __name__ == '__main__':
     rospy.init_node('packer_parser')

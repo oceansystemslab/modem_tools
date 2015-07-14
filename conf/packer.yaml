@@ -1,11 +1,12 @@
 packer_config:
-    loop_rate:  1  # Hz
+    loop_rate:  4  # Hz
     retries:    2  # Hz
     retry_delay: 30  # seconds
     target_address: 5
     topics:
         modem_incoming:         '/modem/burst/out'
         modem_outgoing:         '/modem/burst/out'
+
         body_incoming:          '/modem/unpacker/body_req'
         body_outgoing:          '/modem/packer/body_req'
         position_incoming:      '/modem/unpacker/position_req'
@@ -14,4 +15,6 @@ packer_config:
         nav_outgoing:           '/modem/packer/nav_sts/'
         image_string_incoming:  '/modem/unpacker/image'
         image_string_outgoing:  '/modem/packer/image'
+
+        node_status:           '/modem/unpacker/status'
     requiring_ack: ['body_request', 'position_request']

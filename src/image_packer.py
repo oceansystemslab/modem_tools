@@ -55,7 +55,7 @@ from vehicle_interface.srv import BooleanService, BooleanServiceResponse
 # Constants
 TOPIC_MODEM_CONSTRUCTOR = '/modem/packer/image'
 SRV_SIGNAL = '/image_packer/signal'
-LOOP_RATE = 0.1  # Hz
+LOOP_RATE = 5  # Hz
 
 MAX_SIZE = 128*128  # pixels
 QUALITY = 50  # from 0 (worst) to 100
@@ -64,7 +64,7 @@ class ImagePacker(object):
     def __init__(self, name):
         self.name = name
 
-        self.go = True
+        self.go = False
 
         # Publishers
         self.pub_modem = rospy.Publisher(TOPIC_MODEM_CONSTRUCTOR, String)
@@ -77,8 +77,7 @@ class ImagePacker(object):
         return BooleanServiceResponse(srv.request)
 
     def generate_image_string(self):
-        im = cv2.imread('diver.jpg')
-        im = cv2.cvtColor(im, cv2.COLOR_RGB2GRAY)
+        im = cv2.imread('diver.jpg', cv2.CV_LOAD_IMAGE_GRAYSCALE)
 
         # scale down the image
         scale = np.sqrt(MAX_SIZE/im.size)
@@ -98,12 +97,15 @@ class ImagePacker(object):
 
     def publish_image(self):
         s = self.generate_image_string()
-        self.pub_modem.publish(String(header=rospy.Time.now(), payload=s))
+        msg = String()
+        msg.header.stamp = rospy.Time.now()
+        msg.payload = s
+        self.pub_modem.publish(msg)
 
     def loop(self):
         if self.go:
             self.publish_image()
-            # self.go = False
+            self.go = False
 
 
 if __name__ == '__main__':
