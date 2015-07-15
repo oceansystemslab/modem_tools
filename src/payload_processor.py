@@ -63,6 +63,8 @@ _BODY_REQUEST = 'body_request'
 _NAV = 'nav'
 _STRING_IMAGE = 'string_image'
 _ACK = 'ack'
+_MM_ACK = 'multi_message_ack'
+_MM_REQUEST = 'multi_message_request'  # for requesting missing parts of the message
 _MULTI_MESSAGE = 'multi_message'
 _ROS_MESSAGE = 'ros_message'
 _ROS_SERVICE = 'ros_service'
@@ -70,6 +72,7 @@ _ROS_SERVICE = 'ros_service'
 # other strings
 HEADER = 'header'
 MM_HEADER = 'multi_message_header'
+MM_MSG_PART = 'multi_message_part'
 
 # default topics
 TOPICS = {
@@ -113,10 +116,12 @@ TYPE_TO_ID = {
     _STRING_IMAGE:          10,
 
     # general messages described in the config
+    _ACK:                   64,
+    _MM_ACK:                65,
+    _MM_REQUEST:            66,
     _ROS_MESSAGE:           128,
     _ROS_SERVICE:           129,
     _MULTI_MESSAGE:         130,
-    _ACK:                   255,
 
 }
 
@@ -134,10 +139,17 @@ FORMAT = {
     _BODY_REQUEST:          'ffffff',  # requested pose on 6 axes
     _NAV:                   'ddffffff',  # latitude, longitude, *pose
     _ACK:                   'H',  # msg id
+    _MM_ACK:                'H',  # mm msg id
+    _MM_REQUEST:            'HB',  # mm msg id, number of messages, msg ids
+
+    MM_MSG_PART:           'B'  # repeated once for every part
 }
 
-MAX_MSG_LEN = 1000
-MAX_MULTI_MSG_LEN = MAX_MSG_LEN - (struct.calcsize(FORMAT[HEADER]) + struct.calcsize(FORMAT[MM_HEADER]))
+# other constants
+MAX_FULL_MSG_LEN = 1024
+MAX_MULTI_MSG_BODY_LEN = MAX_FULL_MSG_LEN - (struct.calcsize(FORMAT[HEADER]) + struct.calcsize(FORMAT[MM_HEADER]))
+MULTI_MSG_TIMEOUT = 30  # seconds
+MULTI_MSG_RETRY_LIMIT = 3
 
 class PackerParser(object):
     def __init__(self, name, config, outgoing, incoming):
@@ -145,7 +157,6 @@ class PackerParser(object):
 
         topics = config['topics']
         self.target_address = config['target_address']
-        # self.header_length = struct.calcsize(FORMAT[_HEADER])
         self.requiring_ack = config['requiring_ack']
 
         self.msg_out_cnt = 0
@@ -155,6 +166,7 @@ class PackerParser(object):
         self.multi_msgs_out = {}
         self.multi_msgs_in = {}
         self.multi_msgs_in_times = {}
+        self.multi_msgs_in_retries = {}
         self.outgoing_msg_buffer = collections.deque()
 
         self.parse = {
@@ -163,6 +175,8 @@ class PackerParser(object):
             _NAV:                  self.parse_nav,
             _STRING_IMAGE:         self.parse_string,
             _ACK:                  self.parse_ack,
+            _MM_ACK:               self.parse_mm_ack,
+            _MM_REQUEST:           self.parse_mm_request,
             _MULTI_MESSAGE:        self.parse_multi_message,
         }
 
@@ -224,7 +238,7 @@ class PackerParser(object):
 
         payload = '{0}{1}'.format(header, payload_body)
 
-        if len(payload) > MAX_MSG_LEN:
+        if len(payload) > MAX_FULL_MSG_LEN:
             self.generate_multi_message(payload)
             return
 
@@ -235,9 +249,27 @@ class PackerParser(object):
         payload_body = struct.pack(FORMAT[payload_type], msg_id)
         self.construct_and_buffer(payload_type, payload_body)
 
+    def send_mm_ack(self, mm_msg_id):
+        payload_type = _MM_ACK
+        payload_body = struct.pack(FORMAT[payload_type], mm_msg_id)
+        self.construct_and_buffer(payload_type, payload_body)
+
+    def send_mm_request(self, mm_msg_id):
+        payload_type = _MM_REQUEST
+
+        missed_parts = []
+        for part, content in enumerate(self.multi_msgs_in[mm_msg_id]):
+            if content is None:
+                missed_parts.append(part)
+
+        payload_body = struct.pack(FORMAT[payload_type], mm_msg_id, len(missed_parts)) +\
+                       struct.pack(str(len(missed_parts)) + FORMAT[MM_MSG_PART], *missed_parts)
+
+        self.construct_and_buffer(payload_type, payload_body)
+
     def generate_multi_message(self, content):
         payload_type = _MULTI_MESSAGE
-        total_parts = int(math.ceil(len(content) / MAX_MULTI_MSG_LEN))
+        total_parts = int(math.ceil(len(content) / MAX_MULTI_MSG_BODY_LEN))
         mean_length = int(math.ceil(len(content)/total_parts))
 
         msg_list = []
@@ -324,7 +356,25 @@ class PackerParser(object):
 
     def parse_ack(self, payload_type, id, body):
         values = struct.unpack(FORMAT[payload_type], body)
-        rospy.loginfo('%s: Message with id %s was delivered' % (self.name, values[0]))
+        msg_id = values[0]
+        rospy.loginfo('%s: Message with id %s was delivered' % (self.name, msg_id))
+
+    def parse_mm_ack(self, payload_type, id, body):
+        values = struct.unpack(FORMAT[payload_type], body)
+        mm_msg_id = values[0]
+        rospy.loginfo('%s: Multi message with id %s was delivered' % (self.name, mm_msg_id))
+        self.multi_msgs_out.pop(mm_msg_id)
+
+    def parse_mm_request(self, payload_type, id, body):
+        values = struct.unpack(FORMAT[payload_type], body[:struct.calcsize(FORMAT[payload_type])])
+        mm_msg_id, parts_amount = values
+
+        # list of all parts that where not received
+        parts = list(struct.unpack(str(parts_amount)+FORMAT[MM_MSG_PART], body[struct.calcsize(FORMAT[payload_type]):]))
+
+        for part in parts:
+            payload = self.multi_msgs_out[mm_msg_id][part]
+            self.outgoing_msg_buffer.appendleft(payload)
 
     def parse_multi_message(self, payload_type, id, body):
         multi_msg_header = struct.unpack(FORMAT[MM_HEADER], body[:struct.calcsize(FORMAT[MM_HEADER])])
@@ -345,6 +395,9 @@ class PackerParser(object):
                 complete_msg = ''.join(msg_list)
                 self.parse_top_level(complete_msg, -1)
                 self.multi_msgs_in.pop(mm_id)
+                self.multi_msgs_in_times.pop(mm_id)
+                self.multi_msgs_in_retries.pop(mm_id)
+                self.send_mm_ack(mm_id)
 
     def parse_unknown(self, payload_type, id, body):
         rospy.logwarn('%s: Message of unknown type %s with id %s was delivered' % (self.name, payload_type, id))
@@ -352,6 +405,30 @@ class PackerParser(object):
 
     def parse_general(self, payload_type, id, body):
         pass
+
+    def check_mm_timeout(self):
+        time_now = rospy.Time.now().to_sec()
+
+        # for partially received multi messages
+        for mm_msg_id, last_msg_time in self.multi_msgs_in_times.items():
+            if last_msg_time - time_now > MULTI_MSG_TIMEOUT:
+                if mm_msg_id not in self.multi_msgs_in_retries.keys():
+                    counter = 1
+                    self.multi_msgs_in_retries.update({mm_msg_id: counter})
+                else:
+                    # increase the retry counter
+                    counter = self.multi_msgs_in_retries[mm_msg_id] + 1
+                    self.multi_msgs_in_retries.update({mm_msg_id: counter})
+
+                if counter > MULTI_MSG_RETRY_LIMIT:
+                    rospy.logwarn('%s: Failed to obtain full multi message with id %s, forgetting the parts!' % (self.name, mm_msg_id))
+                    self.multi_msgs_in.pop(mm_msg_id)
+                    self.multi_msgs_in_times.pop(mm_msg_id)
+                    self.multi_msgs_in_retries.pop(mm_msg_id)
+                else:
+                    # send mm request
+                    self.send_mm_request(mm_msg_id)
+                    self.multi_msgs_in_times.update({mm_msg_id: rospy.Time.now().to_sec()})
 
     def send_from_buffer(self):
         if len(self.outgoing_msg_buffer) == 0:
