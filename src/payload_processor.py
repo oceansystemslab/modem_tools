@@ -262,6 +262,8 @@ class PackerParser(object):
             if content is None:
                 missed_parts.append(part)
 
+        rospy.loginfo('%s: Requesting resending of %s parts of multi message with id %s' % (self.name, len(missed_parts), mm_msg_id))
+
         payload_body = struct.pack(FORMAT[payload_type], mm_msg_id, len(missed_parts)) +\
                        struct.pack(str(len(missed_parts)) + FORMAT[MM_MSG_PART], *missed_parts)
 
@@ -387,6 +389,9 @@ class PackerParser(object):
 
         self.multi_msgs_in[multi_msg_id][part] = content
         self.multi_msgs_in_times.update({multi_msg_id: rospy.Time.now().to_sec()})
+        if multi_msg_id not in self.multi_msgs_in_retries.keys():
+            self.multi_msgs_in_retries.update({multi_msg_id: 0})
+
         self.check_mm_completeness()
 
     def check_mm_completeness(self):
@@ -412,13 +417,9 @@ class PackerParser(object):
         # for partially received multi messages
         for mm_msg_id, last_msg_time in self.multi_msgs_in_times.items():
             if last_msg_time - time_now > MULTI_MSG_TIMEOUT:
-                if mm_msg_id not in self.multi_msgs_in_retries.keys():
-                    counter = 1
-                    self.multi_msgs_in_retries.update({mm_msg_id: counter})
-                else:
-                    # increase the retry counter
-                    counter = self.multi_msgs_in_retries[mm_msg_id] + 1
-                    self.multi_msgs_in_retries.update({mm_msg_id: counter})
+                # increase the retry counter
+                counter = self.multi_msgs_in_retries[mm_msg_id] + 1
+                self.multi_msgs_in_retries.update({mm_msg_id: counter})
 
                 if counter > MULTI_MSG_RETRY_LIMIT:
                     rospy.logwarn('%s: Failed to obtain full multi message with id %s, forgetting the parts!' % (self.name, mm_msg_id))
