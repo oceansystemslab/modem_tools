@@ -2,7 +2,7 @@ packer_config:
     loop_rate:  4  # Hz
     retries:    2  # Hz
     retry_delay: 30  # seconds
-    target_address: 5  # set this!!
+    target_address: 10  # set this!!
     topics:
         modem_incoming:         '/modem/burst/in'
         modem_outgoing:         '/modem/burst/out'
