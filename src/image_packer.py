@@ -67,7 +67,7 @@ class ImagePacker(object):
         self.go = False
 
         # Publishers
-        self.pub_modem = rospy.Publisher(TOPIC_MODEM_CONSTRUCTOR, String)
+        self.pub_modem = rospy.Publisher(TOPIC_MODEM_CONSTRUCTOR, String, tcp_nodelay=True, queue_size=1)
 
         # Services
         self.srv_signal = rospy.Service(SRV_SIGNAL, BooleanService, self.handle_signal)

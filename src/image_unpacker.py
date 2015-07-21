@@ -64,7 +64,7 @@ class ImageUnpacker(object):
         self.name = name
 
         # Subscribers
-        self.sub_modem = rospy.Subscriber(TOPIC_MODEM_CONSTRUCTOR, String, self.handle_image)
+        self.sub_modem = rospy.Subscriber(TOPIC_MODEM_CONSTRUCTOR, String, self.handle_image, tcp_nodelay=True, queue_size=1)
 
         # Publishers
 

@@ -181,33 +181,35 @@ class PackerParser(object):
         }
 
         # Publishers
-        self.pub_modem = rospy.Publisher(topics['modem_incoming'], AcousticModemPayload)
+        self.pub_modem = rospy.Publisher(topics['modem_incoming'], AcousticModemPayload, tcp_nodelay=True, queue_size=1)
 
-        self.pub_nav = rospy.Publisher(topics['nav_incoming'], NavSts)
-        self.pub_position = rospy.Publisher(topics['position_incoming'], PilotRequest)
-        self.pub_body = rospy.Publisher(topics['body_incoming'], PilotRequest)
-        self.pub_string = rospy.Publisher(topics['image_string_incoming'], String)
+        self.pub_nav = rospy.Publisher(topics['nav_incoming'], NavSts, tcp_nodelay=True, queue_size=1)
+        self.pub_position = rospy.Publisher(topics['position_incoming'], PilotRequest, tcp_nodelay=True, queue_size=1)
+        self.pub_body = rospy.Publisher(topics['body_incoming'], PilotRequest, tcp_nodelay=True, queue_size=1)
+        self.pub_string = rospy.Publisher(topics['image_string_incoming'], String, tcp_nodelay=True, queue_size=1)
 
         # publishers for incoming general messages (based on the description in config)
         # maps from topic id to publisher
         self.pub_incoming = {mc.TOPIC_STRING_TO_ID[gm['publish_topic']]:
-                                 rospy.Publisher(gm['publish_topic'], mc.ros_msg_string2type(gm['message_type'])) for gm in incoming}
+                                 rospy.Publisher(gm['publish_topic'], mc.ros_msg_string2type(gm['message_type']), tcp_nodelay=True, queue_size=1) for gm in incoming}
 
-        self.pub_status = rospy.Publisher(topics['node_status'], NodeStatus)
+        self.pub_status = rospy.Publisher(topics['node_status'], NodeStatus, tcp_nodelay=True, queue_size=1)
 
         # Subscribers
-        self.sub_modem = rospy.Subscriber(topics['modem_outgoing'], AcousticModemPayload, self.handle_burst_msg)
+        self.sub_modem = rospy.Subscriber(topics['modem_outgoing'], AcousticModemPayload, self.handle_burst_msg, tcp_nodelay=True, queue_size=1)
 
-        self.sub_nav = rospy.Subscriber(topics['nav_outgoing'], NavSts, self.handle_nav)
-        self.sub_position = rospy.Subscriber(topics['position_outgoing'], PilotRequest, self.handle_position)
-        self.sub_body = rospy.Subscriber(topics['body_outgoing'], PilotRequest, self.handle_body)
-        self.sub_string = rospy.Subscriber(topics['image_string_outgoing'], String, self.handle_string)
+        self.sub_nav = rospy.Subscriber(topics['nav_outgoing'], NavSts, self.handle_nav, tcp_nodelay=True, queue_size=1)
+        self.sub_position = rospy.Subscriber(topics['position_outgoing'], PilotRequest, self.handle_position, tcp_nodelay=True, queue_size=1)
+        self.sub_body = rospy.Subscriber(topics['body_outgoing'], PilotRequest, self.handle_body, tcp_nodelay=True, queue_size=1)
+        self.sub_string = rospy.Subscriber(topics['image_string_outgoing'], String, self.handle_string, tcp_nodelay=True, queue_size=1)
 
         # subscribers for outgoing general messages (based on the description in config)
         self.sub_outgoing = [rospy.Subscriber(gm['subscribe_topic'],
                                               mc.ros_msg_string2type(gm['message_type']),
                                               self.parse_general,
-                                              gm['publish_topic']) for gm in outgoing]
+                                              gm['publish_topic'],
+                                              tcp_nodelay=True,
+                                              queue_size=1) for gm in outgoing]
 
     def handle_nav(self, ros_msg):
         payload_type = _NAV
