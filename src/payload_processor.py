@@ -323,31 +323,33 @@ class PackerParser(object):
         ns.info = [KeyValue(key, str(value)) for key, value in info.items()]
         self.pub_status.publish(ns)
 
-        self.parse.get(payload_type, self.parse_unknown)(payload_type, msg_id, body)
+        self.parse.get(payload_type, self.parse_unknown)(payload_type, msg_id, time_sent, body)
         rospy.loginfo('%s: Received message of type %s with id %s from %s' % (self.name, payload_type, msg_id, address))
 
         if payload_type in self.requiring_ack:
             self.send_ack(msg_id)
 
-    def parse_nav(self, payload_type, id, body):
+    def parse_nav(self, payload_type, id, dispatch_time, body):
         values = struct.unpack(FORMAT[payload_type], body)
 
         nav_msg = NavSts()
+        nav_msg.header.stamp = rospy.Time.from_sec(dispatch_time)
         nav_msg.global_position.latitude, nav_msg.global_position.longitude = values[0:2]
         nav_msg.position.north, nav_msg.position.east, nav_msg.position.depth = values[2:5]
         nav_msg.orientation.roll, nav_msg.orientation.pitch, nav_msg.orientation.yaw = values[5:8]
 
         self.pub_nav.publish(nav_msg)
 
-    def parse_position_req(self, payload_type, id, body):
+    def parse_position_req(self, payload_type, id, dispatch_time, body):
         values = struct.unpack(FORMAT[payload_type], body)
 
         pilot_msg = PilotRequest()
+        pilot_msg.header.stamp = rospy.Time.from_sec(dispatch_time)
         pilot_msg.position = list(values[0:6])
 
         self.pub_position.publish(pilot_msg)
 
-    def parse_body_req(self, payload_type, id, body):
+    def parse_body_req(self, payload_type, id, dispatch_time, body):
         values = struct.unpack(FORMAT[payload_type], body)
 
         pilot_msg = PilotRequest()
@@ -355,21 +357,24 @@ class PackerParser(object):
 
         self.pub_body.publish(pilot_msg)
 
-    def parse_string(self, payload_type, id, body):
-        self.pub_string.publish(String(payload=body))
+    def parse_string(self, payload_type, id, dispatch_time, body):
+        msg = String()
+        msg.header.stamp = rospy.Time.from_sec(dispatch_time)
+        msg.payload = body
+        self.pub_string.publish(msg)
 
-    def parse_ack(self, payload_type, id, body):
+    def parse_ack(self, payload_type, id, dispatch_time, body):
         values = struct.unpack(FORMAT[payload_type], body)
         msg_id = values[0]
         rospy.loginfo('%s: Message with id %s was delivered' % (self.name, msg_id))
 
-    def parse_mm_ack(self, payload_type, id, body):
+    def parse_mm_ack(self, payload_type, id, dispatch_time, body):
         values = struct.unpack(FORMAT[payload_type], body)
         mm_msg_id = values[0]
         rospy.loginfo('%s: Multi message with id %s was delivered' % (self.name, mm_msg_id))
         self.multi_msgs_out.pop(mm_msg_id)
 
-    def parse_mm_request(self, payload_type, id, body):
+    def parse_mm_request(self, payload_type, id, dispatch_time, body):
         values = struct.unpack(FORMAT[payload_type], body[:struct.calcsize(FORMAT[payload_type])])
         mm_msg_id, parts_amount = values
 
@@ -380,7 +385,7 @@ class PackerParser(object):
             payload = self.multi_msgs_out[mm_msg_id][part]
             self.outgoing_msg_buffer.appendleft(payload)
 
-    def parse_multi_message(self, payload_type, id, body):
+    def parse_multi_message(self, payload_type, id, dispatch_time, body):
         multi_msg_header = struct.unpack(FORMAT[MM_HEADER], body[:struct.calcsize(FORMAT[MM_HEADER])])
         content = body[struct.calcsize(FORMAT[MM_HEADER]):]
         multi_msg_id, part, total_parts = multi_msg_header
@@ -406,11 +411,11 @@ class PackerParser(object):
                 self.multi_msgs_in_retries.pop(mm_id)
                 self.send_mm_ack(mm_id)
 
-    def parse_unknown(self, payload_type, id, body):
+    def parse_unknown(self, payload_type, id, dispatch_time, body):
         rospy.logwarn('%s: Message of unknown type %s with id %s was delivered' % (self.name, payload_type, id))
         # raise KeyError()
 
-    def parse_general(self, payload_type, id, body):
+    def parse_general(self, payload_type, id, dispatch_time, body):
         pass
 
     def check_mm_timeout(self):
