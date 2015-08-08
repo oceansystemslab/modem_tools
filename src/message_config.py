@@ -38,6 +38,7 @@
 #   Valerio De Carolis, Marian Andrecki, Corina Barbalata, Gordon Frost
 from __future__ import division
 
+import re
 import roslib
 roslib.load_manifest('modem_tools')
 
@@ -75,3 +76,92 @@ def ros_msg_string2type(msg_name):
         if msg_type.__name__ == msg_name:
             return msg_type
     raise KeyError('%s message is not described in message_config.py' % msg_name)
+
+PRIMITIVES = {
+    'bool':                 '?',
+    'uint8':                'B',
+    'uint16':               'H',
+    'uint32':               'I',
+    'uint64':               'L',
+    'int8':                 'b',
+    'int16':                'h',
+    'int32':                'i',
+    'int64':                'l',
+    'float32':              'f',
+    'float64':              'd',
+    'string':               's',
+}
+
+DYNAMIC_TYPES = set('string')
+
+FORMAT_UINT16 = 'H'
+
+BRACKET_OPEN = '['
+BRACKET_CLOSE = ']'
+
+DYNAMIC_LENGTH = -1
+
+def get_value_in_brackets(slot):
+    """
+
+    :param slot: a string describing the ROS type of the slot
+    :return: an integer indicating number of elements in the slot and bool describing whether the list is dynamic
+    """
+    s = re.findall(r'\[[0-9]*\]', slot)
+    s = s.lstrip(BRACKET_OPEN)
+    s = s.rstrip(BRACKET_CLOSE)
+    if len(s) > 0:
+        return int(s), False
+    else:
+        return -1, True
+
+class GeneralMessage(object):
+    def __init__(self, msg):
+        self.msg = msg
+        self.type = type(msg)
+        self.type_str = msg._type
+        self.slots = self.type._get_types(msg)
+        self.format = ''
+        self.values = []
+
+    def get_format_and_values(self):
+        for slot in self.slots:
+            value = getattr(self.type, slot)
+
+            # check if the slot is a list and determine its length
+            if BRACKET_OPEN in slot:
+                length, dynamic = get_value_in_brackets(slot)
+                slot_type = slot.split(BRACKET_OPEN)[0]
+
+            elif slot in DYNAMIC_TYPES:
+                length = -1
+                dynamic = True
+                slot_type = slot
+
+            else:
+                length = 1
+                dynamic = False
+                slot_type = slot
+
+            # precede dynamic list with length of the list
+            if dynamic is True:
+                length = len(value)
+                self.format += FORMAT_UINT16
+                self.values.append(length)
+
+            # add values from the slot
+            if slot_type in PRIMITIVES.keys():
+                self.format += length*PRIMITIVES[slot_type]
+                if type(value) is list:
+                    self.values.extend(value)
+                else    :
+                    self.values.append(value)
+                else:
+                    pass
+
+
+
+
+
+
+

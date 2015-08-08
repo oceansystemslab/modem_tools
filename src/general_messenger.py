@@ -44,6 +44,8 @@ roslib.load_manifest('modem_tools')
 
 import rospy
 
+
+# import all messages
 # Messages
 from auv_msgs.msg import NavSts
 from vehicle_interface.msg import AcousticModemPayload, PilotRequest, String
