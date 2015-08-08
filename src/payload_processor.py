@@ -125,8 +125,10 @@ TYPE_TO_ID = {
 
 }
 
+# TODO: use comprehension dictionaries later (not available in Python 2.6 [Emily boat])
 # create inverse dictionary
-ID_TO_TYPE = {value: key for key, value in TYPE_TO_ID.items()}
+# ID_TO_TYPE = {value: key for key, value in TYPE_TO_ID.items()}
+ID_TO_TYPE = dict((value, key) for key, value in TYPE_TO_ID.items())
 
 # struct formats for encoding/decoding parts of the messages
 FORMAT = {
