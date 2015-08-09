@@ -51,7 +51,7 @@ import message_config as mc
 # Messages
 from auv_msgs.msg import NavSts
 from diagnostic_msgs.msg import KeyValue
-from vehicle_interface.msg import AcousticModemPayload, PilotRequest, String, NodeStatus
+from vehicle_interface.msg import AcousticModemPayload, PilotRequest, String, AcousticDeconstructionStatus
 
 # TODO: add general message sending
 # TODO: add storage of messages waiting for ack
@@ -139,7 +139,7 @@ FORMAT = {
     # hardcoded ROS messages
     _POSITION_REQUEST:      'ffffff',  # requested pose on 6 axes
     _BODY_REQUEST:          'ffffff',  # requested pose on 6 axes
-    _NAV:                   'ddffffff',  # latitude, longitude, *pose
+    _NAV:                   'ddd',  # latitude, longitude, stamp in seconds
     _ACK:                   'H',  # msg id
     _MM_ACK:                'H',  # mm msg id
     _MM_REQUEST:            'HB',  # mm msg id, number of messages, msg ids
@@ -148,9 +148,9 @@ FORMAT = {
 }
 
 # other constants
-MAX_FULL_MSG_LEN = 1024
+MAX_FULL_MSG_LEN = 300
 MAX_MULTI_MSG_BODY_LEN = MAX_FULL_MSG_LEN - (struct.calcsize(FORMAT[HEADER]) + struct.calcsize(FORMAT[MM_HEADER]))
-MULTI_MSG_TIMEOUT = 30  # seconds
+MULTI_MSG_TIMEOUT_PER_PART = 5  # seconds
 MULTI_MSG_RETRY_LIMIT = 3
 
 class PackerParser(object):
@@ -161,14 +161,16 @@ class PackerParser(object):
         self.target_address = config['target_address']
         self.requiring_ack = config['requiring_ack']
 
+        self.retry_delay = config['retry_delay']
+        self.retries = config['retries']
+
         self.msg_out_cnt = 0
         self.msg_in_cnt = 0
         self.multi_msg_out_cnt = 0
 
+        self.single_msgs_out = {}
         self.multi_msgs_out = {}
         self.multi_msgs_in = {}
-        self.multi_msgs_in_times = {}
-        self.multi_msgs_in_retries = {}
         self.outgoing_msg_buffer = collections.deque()
 
         self.parse = {
@@ -195,7 +197,7 @@ class PackerParser(object):
         self.pub_incoming = {mc.TOPIC_STRING_TO_ID[gm['publish_topic']]:
                                  rospy.Publisher(gm['publish_topic'], mc.ros_msg_string2type(gm['message_type']), tcp_nodelay=True, queue_size=1) for gm in incoming}
 
-        self.pub_status = rospy.Publisher(topics['node_status'], NodeStatus, tcp_nodelay=True, queue_size=1)
+        self.pub_status = rospy.Publisher(topics['node_status'], AcousticDeconstructionStatus, tcp_nodelay=True, queue_size=1)
 
         # Subscribers
         self.sub_modem = rospy.Subscriber(topics['modem_outgoing'], AcousticModemPayload, self.handle_burst_msg, tcp_nodelay=True, queue_size=1)
@@ -217,8 +219,9 @@ class PackerParser(object):
         payload_type = _NAV
         payload_body = struct.pack(FORMAT[payload_type],
                                    ros_msg.global_position.latitude, ros_msg.global_position.longitude,
-                                   ros_msg.position.north, ros_msg.position.north, ros_msg.position.north,
-                                   ros_msg.orientation.roll, ros_msg.orientation.pitch, ros_msg.orientation.yaw)
+                                   ros_msg.header.stamp.to_sec())
+                                   # ros_msg.position.north, ros_msg.position.north, ros_msg.position.north,
+                                   # ros_msg.orientation.roll, ros_msg.orientation.pitch, ros_msg.orientation.yaw)
         self.construct_and_buffer(payload_type, payload_body)
 
     def handle_body(self, ros_msg):
@@ -238,7 +241,6 @@ class PackerParser(object):
 
     def construct_and_buffer(self, payload_type, payload_body):
         header = struct.pack(FORMAT[HEADER], TYPE_TO_ID[payload_type], self.msg_out_cnt, rospy.Time.now().to_sec())
-        self.msg_out_cnt += 1
 
         payload = '{0}{1}'.format(header, payload_body)
 
@@ -246,6 +248,12 @@ class PackerParser(object):
             self.generate_multi_message(payload)
             return
 
+        if payload_type in self.requiring_ack:
+            msg_tracker = mc.SingleMessageTracker(payload)
+            msg_tracker.update_last_time(rospy.Time.now().to_sec())
+            self.single_msgs_out.update({self.msg_out_cnt: msg_tracker})
+
+        self.msg_out_cnt += 1
         self.outgoing_msg_buffer.appendleft(payload)
 
     def send_ack(self, msg_id):
@@ -265,8 +273,9 @@ class PackerParser(object):
         for part, content in enumerate(self.multi_msgs_in[mm_msg_id]):
             if content is None:
                 missed_parts.append(part)
+        missed_parts = self.multi_msgs_in[mm_msg_id].get_empty_slots_indices()
 
-        rospy.loginfo('%s: Requesting resending of %s parts of multi message with id %s' % (self.name, len(missed_parts), mm_msg_id))
+        rospy.loginfo('%s: Requesting resending of parts: %s of multi message with id %s' % (self.name, missed_parts, mm_msg_id))
 
         payload_body = struct.pack(FORMAT[payload_type], mm_msg_id, len(missed_parts)) +\
                        struct.pack(str(len(missed_parts)) + FORMAT[MM_MSG_PART], *missed_parts)
@@ -278,7 +287,7 @@ class PackerParser(object):
         total_parts = int(math.ceil(len(content) / MAX_MULTI_MSG_BODY_LEN))
         mean_length = int(math.ceil(len(content)/total_parts))
 
-        msg_list = []
+        multi_msg = mc.MultiMessageTracker(total_parts)
 
         for i in range(total_parts):
             header = struct.pack(FORMAT[HEADER], TYPE_TO_ID[payload_type], self.msg_out_cnt, rospy.Time.now().to_sec())
@@ -287,13 +296,16 @@ class PackerParser(object):
             content_section = content[i*mean_length: (i+1)*mean_length]
 
             payload = '{0}{1}{2}'.format(header, multi_msg_header, content_section)
-            msg_list.append(payload)
 
-        self.multi_msgs_out.update({self.multi_msg_out_cnt: msg_list})
+            multi_msg.add_part(i, payload)
+
+        self.multi_msgs_out.update({self.multi_msg_out_cnt: multi_msg})
         self.multi_msg_out_cnt += 1
 
-        for msg in msg_list:
-            self.outgoing_msg_buffer.appendleft(msg)
+        # to induce failure in sending first part do:
+        # for payload in multi_msg.payloads[1:]:
+        for payload in multi_msg.payloads:
+            self.outgoing_msg_buffer.appendleft(payload)
 
     def handle_burst_msg(self, msg):
         self.parse_top_level(msg.payload, msg.address)
@@ -318,35 +330,34 @@ class PackerParser(object):
         #     'msg_in_cnt': self.msg_in_cnt
         # }
 
-        ads = NodeStatus()
+        ads = AcousticDeconstructionStatus()
         ads.header.stamp = rospy.Time.now()
-        ads.node = self.name
         ads.time_packed = time_packed
         ads.time_unpacked = time_unpacked
         ads.length = len(payload)
 
-        ads.message = payload
+        # ads.message = payload
         # ns.info = [KeyValue(key, str(value)) for key, value in info.items()]
         self.pub_status.publish(ads)
 
-        self.parse.get(payload_type, self.parse_unknown)(payload_type, msg_id, time_packed, body)
+        self.parse.get(payload_type, self.parse_unknown)(payload_type, msg_id, time_packed, body, address)
         rospy.loginfo('%s: Received message of type %s with id %s from %s' % (self.name, payload_type, msg_id, address))
 
         if payload_type in self.requiring_ack:
             self.send_ack(msg_id)
 
-    def parse_nav(self, payload_type, id, dispatch_time, body):
+    def parse_nav(self, payload_type, id, dispatch_time, body, origin_address):
         values = struct.unpack(FORMAT[payload_type], body)
 
         nav_msg = NavSts()
-        nav_msg.header.stamp = rospy.Time.from_sec(dispatch_time)
         nav_msg.global_position.latitude, nav_msg.global_position.longitude = values[0:2]
-        nav_msg.position.north, nav_msg.position.east, nav_msg.position.depth = values[2:5]
-        nav_msg.orientation.roll, nav_msg.orientation.pitch, nav_msg.orientation.yaw = values[5:8]
+        nav_msg.header.stamp = rospy.Time.from_sec(values[2])
+        # nav_msg.position.north, nav_msg.position.east, nav_msg.position.depth = values[2:5]
+        # nav_msg.orientation.roll, nav_msg.orientation.pitch, nav_msg.orientation.yaw = values[5:8]
 
         self.pub_nav.publish(nav_msg)
 
-    def parse_position_req(self, payload_type, id, dispatch_time, body):
+    def parse_position_req(self, payload_type, id, dispatch_time, body, origin_address):
         values = struct.unpack(FORMAT[payload_type], body)
 
         pilot_msg = PilotRequest()
@@ -355,7 +366,7 @@ class PackerParser(object):
 
         self.pub_position.publish(pilot_msg)
 
-    def parse_body_req(self, payload_type, id, dispatch_time, body):
+    def parse_body_req(self, payload_type, id, dispatch_time, body, origin_address):
         values = struct.unpack(FORMAT[payload_type], body)
 
         pilot_msg = PilotRequest()
@@ -363,24 +374,25 @@ class PackerParser(object):
 
         self.pub_body.publish(pilot_msg)
 
-    def parse_string(self, payload_type, id, dispatch_time, body):
+    def parse_string(self, payload_type, id, dispatch_time, body, origin_address):
         msg = String()
         msg.header.stamp = rospy.Time.from_sec(dispatch_time)
         msg.payload = body
         self.pub_string.publish(msg)
 
-    def parse_ack(self, payload_type, id, dispatch_time, body):
+    def parse_ack(self, payload_type, id, dispatch_time, body, origin_address):
         values = struct.unpack(FORMAT[payload_type], body)
         msg_id = values[0]
         rospy.loginfo('%s: Message with id %s was delivered' % (self.name, msg_id))
+        self.single_msgs_out.pop(msg_id)
 
-    def parse_mm_ack(self, payload_type, id, dispatch_time, body):
+    def parse_mm_ack(self, payload_type, id, dispatch_time, body, origin_address):
         values = struct.unpack(FORMAT[payload_type], body)
         mm_msg_id = values[0]
         rospy.loginfo('%s: Multi message with id %s was delivered' % (self.name, mm_msg_id))
         self.multi_msgs_out.pop(mm_msg_id)
 
-    def parse_mm_request(self, payload_type, id, dispatch_time, body):
+    def parse_mm_request(self, payload_type, id, dispatch_time, body, origin_address):
         values = struct.unpack(FORMAT[payload_type], body[:struct.calcsize(FORMAT[payload_type])])
         mm_msg_id, parts_amount = values
 
@@ -388,33 +400,30 @@ class PackerParser(object):
         parts = list(struct.unpack(str(parts_amount)+FORMAT[MM_MSG_PART], body[struct.calcsize(FORMAT[payload_type]):]))
 
         for part in parts:
-            payload = self.multi_msgs_out[mm_msg_id][part]
+            payload = self.multi_msgs_out[mm_msg_id].get_part(part)
             self.outgoing_msg_buffer.appendleft(payload)
 
-    def parse_multi_message(self, payload_type, id, dispatch_time, body):
+    def parse_multi_message(self, payload_type, id, dispatch_time, body, origin_address):
         multi_msg_header = struct.unpack(FORMAT[MM_HEADER], body[:struct.calcsize(FORMAT[MM_HEADER])])
         content = body[struct.calcsize(FORMAT[MM_HEADER]):]
         multi_msg_id, part, total_parts = multi_msg_header
 
         if multi_msg_id not in self.multi_msgs_in.keys():
-            msg_list = [False for i in range(total_parts)]
-            self.multi_msgs_in.update({multi_msg_id: msg_list})
+            multi_msg = mc.MultiMessageTracker(total_parts)
+            multi_msg.set_address(origin_address)
+            self.multi_msgs_in.update({multi_msg_id: multi_msg})
 
-        self.multi_msgs_in[multi_msg_id][part] = content
-        self.multi_msgs_in_times.update({multi_msg_id: rospy.Time.now().to_sec()})
-        if multi_msg_id not in self.multi_msgs_in_retries.keys():
-            self.multi_msgs_in_retries.update({multi_msg_id: 0})
+        self.multi_msgs_in[multi_msg_id].add_part(part, content)
+        self.multi_msgs_in[multi_msg_id].update_last_time(rospy.Time.now().to_sec())
 
         self.check_mm_completeness()
 
     def check_mm_completeness(self):
-        for mm_id, msg_list in self.multi_msgs_in.items():
-            if all(msg_list):
-                complete_msg = ''.join(msg_list)
-                self.parse_top_level(complete_msg, -1)
+        for mm_id, multi_msg in self.multi_msgs_in.items():
+            if multi_msg.is_complete():
+                assembled_payload = multi_msg.combine()
+                self.parse_top_level(assembled_payload, multi_msg.get_address())
                 self.multi_msgs_in.pop(mm_id)
-                self.multi_msgs_in_times.pop(mm_id)
-                self.multi_msgs_in_retries.pop(mm_id)
                 self.send_mm_ack(mm_id)
 
     def parse_unknown(self, payload_type, id, dispatch_time, body):
@@ -424,25 +433,39 @@ class PackerParser(object):
     def parse_general(self, payload_type, id, dispatch_time, body):
         pass
 
-    def check_mm_timeout(self):
+    def check_multi_msg_request_timeout(self):
         time_now = rospy.Time.now().to_sec()
 
         # for partially received multi messages
-        for mm_msg_id, last_msg_time in self.multi_msgs_in_times.items():
-            if last_msg_time - time_now > MULTI_MSG_TIMEOUT:
+        for mm_msg_id, multi_message in self.multi_msgs_in.items():
+            if time_now - multi_message.get_last_time() > MULTI_MSG_TIMEOUT_PER_PART * multi_message.get_number_of_parts():
                 # increase the retry counter
-                counter = self.multi_msgs_in_retries[mm_msg_id] + 1
-                self.multi_msgs_in_retries.update({mm_msg_id: counter})
+                multi_message.inc_retries()
 
-                if counter > MULTI_MSG_RETRY_LIMIT:
+                if multi_message.get_retries() > MULTI_MSG_RETRY_LIMIT:
                     rospy.logwarn('%s: Failed to obtain full multi message with id %s, forgetting the parts!' % (self.name, mm_msg_id))
                     self.multi_msgs_in.pop(mm_msg_id)
-                    self.multi_msgs_in_times.pop(mm_msg_id)
-                    self.multi_msgs_in_retries.pop(mm_msg_id)
                 else:
                     # send mm request
                     self.send_mm_request(mm_msg_id)
-                    self.multi_msgs_in_times.update({mm_msg_id: rospy.Time.now().to_sec()})
+                    multi_message.update_last_time(rospy.Time.now().to_sec())
+
+    def check_single_msg_resend_timeout(self):
+        time_now = rospy.Time.now().to_sec()
+
+        for msg_id, msg_tracker in self.single_msgs_out.items():
+            if time_now - msg_tracker.get_last_time() > self.retry_delay:
+                # increase the retry counter
+                msg_tracker.inc_retries()
+
+                if msg_tracker.get_retries() > self.retries:
+                    rospy.logwarn('%s: Failed to deliver message with id %s after %s retries. Giving up!'
+                                  % (self.name, msg_id, self.retries))
+                    self.single_msgs_out.pop(msg_id)
+                else:
+                    # send mm request
+                    msg_tracker.update_last_time(rospy.Time.now().to_sec())
+                    self.outgoing_msg_buffer.appendleft(msg_tracker.payload)
 
     def send_from_buffer(self):
         if len(self.outgoing_msg_buffer) == 0:
@@ -463,6 +486,8 @@ class PackerParser(object):
 
     def loop(self):
         self.send_from_buffer()
+        self.check_multi_msg_request_timeout()
+        self.check_single_msg_resend_timeout()
 
 if __name__ == '__main__':
     rospy.init_node('packer_parser')

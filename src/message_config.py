@@ -97,6 +97,79 @@ PRIMITIVES = {
 }
 
 
+class MessageContainer(object):
+    def __init__(self, msg_type, address, payload_body):
+        self.target_address = address
+        self.type = msg_type
+
+MULTI_MSG = 'multi_msg'
+SINGLE_MSG = 'single_msg'
+
+
+class Tracker(object):
+    def __init__(self):
+        # when was the message sent last time?
+        self.t_last_sent = None
+        # how many times has it been sent already?
+        self.retries = 0
+
+    def inc_retries(self):
+        self.retries += 1
+
+    def get_retries(self):
+        return self.retries
+
+    def update_last_time(self, time):
+        self.t_last_sent = time
+
+    def get_last_time(self):
+        return self.t_last_sent
+
+
+class SingleMessageTracker(Tracker):
+    def __init__(self, payload):
+        self.payload = payload
+
+        super(SingleMessageTracker, self).__init__()
+
+
+class MultiMessageTracker(Tracker):
+    def __init__(self, number_of_parts):
+        self.origin_address = -1
+        self.payloads = [None for i in range(number_of_parts)]
+
+        super(MultiMessageTracker, self).__init__()
+
+    def add_part(self, index, payload):
+        self.payloads[index] = payload
+
+    def get_number_of_parts(self):
+        return len(self.payloads)
+
+    def get_part(self, index):
+        return self.payloads[index]
+
+    def set_address(self, address):
+        self.origin_address = address
+
+    def get_address(self):
+        return self.origin_address
+
+    def get_empty_slots_indices(self):
+        empty_slots = []
+        for part, content in enumerate(self.payloads):
+            if content is None:
+                empty_slots.append(part)
+
+        return empty_slots
+
+    def is_complete(self):
+        return all(self.payloads)
+
+    def combine(self):
+        return ''.join(self.payloads)
+
+
 # TODO: General messages in progress
 #
 # DYNAMIC_TYPES = set('string')
