@@ -133,7 +133,7 @@ ID_TO_TYPE = dict((value, key) for key, value in TYPE_TO_ID.items())
 # struct formats for encoding/decoding parts of the messages
 FORMAT = {
     # protocol specific
-    HEADER:                'BHd',  # payload type, msg id,
+    HEADER:                'BHd',  # payload type, msg id, stamp in seconds
     MM_HEADER:             'HBB',  # multi message id, part number, total parts
 
     # hardcoded ROS messages
@@ -306,26 +306,30 @@ class PackerParser(object):
 
         payload_type = ID_TO_TYPE[header_values[0]]
         msg_id = header_values[1]
-        time_sent = header_values[2]
-        time_received = rospy.Time.now().to_sec()
+        time_packed = header_values[2]
+        time_unpacked = rospy.Time.now().to_sec()
 
         self.msg_in_cnt += 1
-        info = {
-            'time_sent': time_sent,
-            'time_received': time_received,
-            'length': len(payload),
-            'speed_bps': len(payload)*8/(time_received - time_sent),
-            'msg_in_cnt': self.msg_in_cnt
-        }
+        # info = {
+        #     'time_sent': time_sent,
+        #     'time_received': time_received,
+        #     'length': len(payload),
+        #     'speed_bps': len(payload)*8/(time_received - time_sent),
+        #     'msg_in_cnt': self.msg_in_cnt
+        # }
 
-        ns = NodeStatus()
-        ns.header.stamp = rospy.Time.now()
-        ns.node = self.name
-        ns.message = payload
-        ns.info = [KeyValue(key, str(value)) for key, value in info.items()]
-        self.pub_status.publish(ns)
+        ads = NodeStatus()
+        ads.header.stamp = rospy.Time.now()
+        ads.node = self.name
+        ads.time_packed = time_packed
+        ads.time_unpacked = time_unpacked
+        ads.length = len(payload)
 
-        self.parse.get(payload_type, self.parse_unknown)(payload_type, msg_id, time_sent, body)
+        ads.message = payload
+        # ns.info = [KeyValue(key, str(value)) for key, value in info.items()]
+        self.pub_status.publish(ads)
+
+        self.parse.get(payload_type, self.parse_unknown)(payload_type, msg_id, time_packed, body)
         rospy.loginfo('%s: Received message of type %s with id %s from %s' % (self.name, payload_type, msg_id, address))
 
         if payload_type in self.requiring_ack:
