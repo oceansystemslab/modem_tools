@@ -72,7 +72,9 @@ ROS_MSG_ID_TO_TYPE = {
 ROS_MSG_TYPE_TO_ID = dict((value, key) for key, value in ROS_MSG_ID_TO_TYPE.items())
 
 # all types of messages that can be converted to structs
-ROS_MSG_TYPES = {Header}  # additional message types
+# ROS_MSG_TYPES = {Header}  # additional message types
+ROS_MSG_TYPES = set()
+ROS_MSG_TYPES.add(Header)
 ROS_MSG_TYPES = ROS_MSG_TYPES.union(set(ROS_MSG_ID_TO_TYPE.values()))  # union with already defined ones
 
 
