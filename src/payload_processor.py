@@ -41,9 +41,9 @@ from __future__ import division
 import struct
 import math
 import collections
-import rospy
 import roslib
 roslib.load_manifest('modem_tools')
+import rospy
 
 
 import message_config as mc
