@@ -222,31 +222,40 @@ class PackerParser(object):
                                    ros_msg.header.stamp.to_sec())
                                    # ros_msg.position.north, ros_msg.position.north, ros_msg.position.north,
                                    # ros_msg.orientation.roll, ros_msg.orientation.pitch, ros_msg.orientation.yaw)
-        self.construct_and_buffer(payload_type, payload_body)
+
+        msg = mc.MessageContainer(payload_type, self.target_address, payload_body)
+        # self.construct_and_buffer(payload_type, payload_body)
+        self.add_to_buffer(msg)
 
     def handle_body(self, ros_msg):
         payload_type = _BODY_REQUEST
         payload_body = struct.pack(FORMAT[payload_type], *ros_msg.position)
-        self.construct_and_buffer(payload_type, payload_body)
+        msg = mc.MessageContainer(payload_type, self.target_address, payload_body)
+        # self.construct_and_buffer(payload_type, payload_body)
+        self.add_to_buffer(msg)
 
     def handle_position(self, ros_msg):
         payload_type = _POSITION_REQUEST
         payload_body = struct.pack(FORMAT[payload_type], *ros_msg.position)
-        self.construct_and_buffer(payload_type, payload_body)
+        msg = mc.MessageContainer(payload_type, self.target_address, payload_body)
+        # self.construct_and_buffer(payload_type, payload_body)
+        self.add_to_buffer(msg)
 
     def handle_string(self, ros_msg):
         payload_type = _STRING_IMAGE
         payload_body = ros_msg.payload
-        self.construct_and_buffer(payload_type, payload_body)
+        msg = mc.MessageContainer(payload_type, self.target_address, payload_body)
+        # self.construct_and_buffer(payload_type, payload_body)
+        self.add_to_buffer(msg)
 
-    def construct_and_buffer(self, payload_type, payload_body):
-        header = struct.pack(FORMAT[HEADER], TYPE_TO_ID[payload_type], self.msg_out_cnt, rospy.Time.now().to_sec())
+    def add_to_buffer(self, msg):
+        if len(msg.payload) + struct.calcsize(FORMAT[HEADER]) > MAX_FULL_MSG_LEN:
+            self.generate_multi_message(msg)
+            return
+
+        header = struct.pack(FORMAT[HEADER], TYPE_TO_ID[msg.type], self.msg_out_cnt, rospy.Time.now().to_sec())
 
         payload = '{0}{1}'.format(header, payload_body)
-
-        if len(payload) > MAX_FULL_MSG_LEN:
-            self.generate_multi_message(payload)
-            return
 
         if payload_type in self.requiring_ack:
             msg_tracker = mc.SingleMessageTracker(payload)
@@ -259,12 +268,12 @@ class PackerParser(object):
     def send_ack(self, msg_id):
         payload_type = _ACK
         payload_body = struct.pack(FORMAT[payload_type], msg_id)
-        self.construct_and_buffer(payload_type, payload_body)
+        self.add_to_buffer(payload_type, payload_body)
 
     def send_mm_ack(self, mm_msg_id):
         payload_type = _MM_ACK
         payload_body = struct.pack(FORMAT[payload_type], mm_msg_id)
-        self.construct_and_buffer(payload_type, payload_body)
+        self.add_to_buffer(payload_type, payload_body)
 
     def send_mm_request(self, mm_msg_id):
         payload_type = _MM_REQUEST
@@ -280,7 +289,7 @@ class PackerParser(object):
         payload_body = struct.pack(FORMAT[payload_type], mm_msg_id, len(missed_parts)) +\
                        struct.pack(str(len(missed_parts)) + FORMAT[MM_MSG_PART], *missed_parts)
 
-        self.construct_and_buffer(payload_type, payload_body)
+        self.add_to_buffer(payload_type, payload_body)
 
     def generate_multi_message(self, content):
         payload_type = _MULTI_MESSAGE
