@@ -57,7 +57,8 @@ TOPICS_ID_TO_STRING = {
     11:     '/nav/nav_sts',
 }
 
-TOPIC_STRING_TO_ID = {value: key for key, value in TOPICS_ID_TO_STRING.items()}
+# TOPIC_STRING_TO_ID = {value: key for key, value in TOPICS_ID_TO_STRING.items()}
+TOPIC_STRING_TO_ID = dict((value, key) for key, value in TOPICS_ID_TO_STRING.items())
 
 # Add messages types here and in the set below (1-255)
 ROS_MSG_ID_TO_TYPE = {
