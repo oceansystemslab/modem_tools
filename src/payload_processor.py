@@ -194,8 +194,8 @@ class PackerParser(object):
 
         # publishers for incoming general messages (based on the description in config)
         # maps from topic id to publisher
-        self.pub_incoming = {mc.TOPIC_STRING_TO_ID[gm['publish_topic']]:
-                                 rospy.Publisher(gm['publish_topic'], mc.ros_msg_string2type(gm['message_type']), tcp_nodelay=True, queue_size=1) for gm in incoming}
+        # self.pub_incoming = {mc.TOPIC_STRING_TO_ID[gm['publish_topic']]:
+        #                          rospy.Publisher(gm['publish_topic'], mc.ros_msg_string2type(gm['message_type']), tcp_nodelay=True, queue_size=1) for gm in incoming}
 
         self.pub_status = rospy.Publisher(topics['node_status'], AcousticDeconstructionStatus, tcp_nodelay=True, queue_size=1)
 
@@ -208,12 +208,12 @@ class PackerParser(object):
         self.sub_string = rospy.Subscriber(topics['image_string_outgoing'], String, self.handle_string, tcp_nodelay=True, queue_size=1)
 
         # subscribers for outgoing general messages (based on the description in config)
-        self.sub_outgoing = [rospy.Subscriber(gm['subscribe_topic'],
-                                              mc.ros_msg_string2type(gm['message_type']),
-                                              self.parse_general,
-                                              gm['publish_topic'],
-                                              tcp_nodelay=True,
-                                              queue_size=1) for gm in outgoing]
+        # self.sub_outgoing = [rospy.Subscriber(gm['subscribe_topic'],
+        #                                       mc.ros_msg_string2type(gm['message_type']),
+        #                                       self.parse_general,
+        #                                       gm['publish_topic'],
+        #                                       tcp_nodelay=True,
+        #                                       queue_size=1) for gm in outgoing]
 
     def handle_nav(self, ros_msg):
         payload_type = _NAV
