@@ -102,8 +102,11 @@ PRIMITIVES = {
 
 class MessageContainer(object):
     def __init__(self, msg_type, address, payload_body):
-        self.target_address = address
+        # origin or target depending on the context
+        self.address = address
         self.type = msg_type
+        self.payload_body = payload_body
+        self.id = None
 
 MULTI_MSG = 'multi_msg'
 SINGLE_MSG = 'single_msg'
@@ -112,7 +115,7 @@ SINGLE_MSG = 'single_msg'
 class Tracker(object):
     def __init__(self):
         # when was the message sent last time?
-        self.t_last_sent = None
+        self.t_last_action = None
         # how many times has it been sent already?
         self.retries = 0
 
@@ -123,15 +126,16 @@ class Tracker(object):
         return self.retries
 
     def update_last_time(self, time):
-        self.t_last_sent = time
+        self.t_last_action = time
 
     def get_last_time(self):
-        return self.t_last_sent
+        return self.t_last_action
 
 
 class SingleMessageTracker(Tracker):
-    def __init__(self, payload):
-        self.payload = payload
+    def __init__(self, msg_box):
+        self.msg_box = msg_box
+        # self.payload = payload
 
         super(SingleMessageTracker, self).__init__()
 
@@ -139,18 +143,18 @@ class SingleMessageTracker(Tracker):
 class MultiMessageTracker(Tracker):
     def __init__(self, number_of_parts):
         self.origin_address = -1
-        self.payloads = [None for i in range(number_of_parts)]
+        self.boxes = [None for i in range(number_of_parts)]
 
         super(MultiMessageTracker, self).__init__()
 
-    def add_part(self, index, payload):
-        self.payloads[index] = payload
+    def add_part(self, index, msg_box):
+        self.boxes[index] = msg_box
 
     def get_number_of_parts(self):
-        return len(self.payloads)
+        return len(self.boxes)
 
     def get_part(self, index):
-        return self.payloads[index]
+        return self.boxes[index]
 
     def set_address(self, address):
         self.origin_address = address
@@ -160,17 +164,21 @@ class MultiMessageTracker(Tracker):
 
     def get_empty_slots_indices(self):
         empty_slots = []
-        for part, content in enumerate(self.payloads):
+        for part, content in enumerate(self.boxes):
             if content is None:
                 empty_slots.append(part)
 
         return empty_slots
 
     def is_complete(self):
-        return all(self.payloads)
+        # true if no empty fields in the list
+        return all(self.boxes)
 
     def combine(self):
-        return ''.join(self.payloads)
+        combined = ''
+        for box in self.boxes:
+            combined += box.payload_body
+        return combined
 
 
 # TODO: General messages in progress
