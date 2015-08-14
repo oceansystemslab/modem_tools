@@ -4,8 +4,8 @@ packer_config:
     retry_delay: 30  # seconds
     target_address: 10  # set this!!
     topics:
-        modem_incoming:         '/modem/burst/out'
-        modem_outgoing:         '/modem/burst/in'
+        modem_incoming:         '/modem/burst/in'
+        modem_outgoing:         '/modem/burst/out'
 
         body_incoming:          '/modem/unpacker/body_req'
         body_outgoing:          '/modem/packer/body_req'

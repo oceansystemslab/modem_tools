@@ -2,9 +2,9 @@ packer_config:
     loop_rate:  4  # Hz
     retries:    1  #
     retry_delay: 30  # seconds
-    target_address: 8  # set this!
+    target_address: 10  # Nessie USBL address
     topics:
-        modem_incoming:         '/modem/burst/out'
+        modem_incoming:         '/modem/burst/in'
         modem_outgoing:         '/modem/burst/out'
 
         body_incoming:          '/pilot/body_req'

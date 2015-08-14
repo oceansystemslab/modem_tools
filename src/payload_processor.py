@@ -76,7 +76,7 @@ MM_MSG_PART = 'multi_message_part'
 
 # default topics
 TOPICS = {
-    'modem_incoming':       '/modem/burst/out',
+    'modem_incoming':       '/modem/burst/in',
     'modem_outgoing':       '/modem/burst/out',
 
     'body_incoming':        '/modem/unpacker/body_req',
@@ -185,7 +185,7 @@ class PackerParser(object):
         }
 
         # Publishers
-        self.pub_modem = rospy.Publisher(topics['modem_incoming'], AcousticModemPayload, tcp_nodelay=True, queue_size=1)
+        self.pub_modem = rospy.Publisher(topics['modem_outgoing'], AcousticModemPayload, tcp_nodelay=True, queue_size=1)
 
         self.pub_nav = rospy.Publisher(topics['nav_incoming'], NavSts, tcp_nodelay=True, queue_size=1)
         self.pub_position = rospy.Publisher(topics['position_incoming'], PilotRequest, tcp_nodelay=True, queue_size=1)
@@ -200,7 +200,7 @@ class PackerParser(object):
         self.pub_status = rospy.Publisher(topics['node_status'], AcousticDeconstructionStatus, tcp_nodelay=True, queue_size=1)
 
         # Subscribers
-        self.sub_modem = rospy.Subscriber(topics['modem_outgoing'], AcousticModemPayload, self.handle_burst_msg, tcp_nodelay=True, queue_size=1)
+        self.sub_modem = rospy.Subscriber(topics['modem_incoming'], AcousticModemPayload, self.handle_burst_msg, tcp_nodelay=True, queue_size=1)
 
         self.sub_nav = rospy.Subscriber(topics['nav_outgoing'], NavSts, self.handle_nav, tcp_nodelay=True, queue_size=1)
         self.sub_position = rospy.Subscriber(topics['position_outgoing'], PilotRequest, self.handle_position, tcp_nodelay=True, queue_size=1)
