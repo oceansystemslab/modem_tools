@@ -40,27 +40,27 @@ from __future__ import division
 
 import struct
 import math
+import numpy as np
 import collections
 import roslib
 roslib.load_manifest('modem_tools')
 import rospy
 
-
 import message_config as mc
 
 # Messages
 from auv_msgs.msg import NavSts
-from diagnostic_msgs.msg import KeyValue
 from vehicle_interface.msg import AcousticModemPayload, PilotRequest, String, AcousticDeconstructionStatus
+from eurathlon_msgs.msg import MissionStatus, MissionCommand
 
 # TODO: add general message sending
-# TODO: add storage of messages waiting for ack
-# TODO: add retrying after some time
 
 # types of payloads
 _POSITION_REQUEST = 'position_request'
 _BODY_REQUEST = 'body_request'
 _NAV = 'nav'
+_MISSION_STS = 'mission_sts'
+_MISSION_CMD = 'mission_cmd'
 _STRING_IMAGE = 'string_image'
 _ACK = 'ack'
 _MM_ACK = 'multi_message_ack'
@@ -83,8 +83,12 @@ TOPICS = {
     'body_outgoing':        '/modem/packer/body_req',
     'position_incoming':    '/modem/unpacker/position_req',
     'position_outgoing':    '/modem/packer/position_req',
-    'nav_incoming':         '/modem/unpacker/nav_sts/',
-    'nav_outgoing':         '/modem/packer/nav_sts/',
+    'mission_sts_incoming': '/modem/unpacker/mission_sts',
+    'mission_sts_outgoing': '/modem/packer/mission_sts',
+    'mission_cmd_incoming': '/modem/unpacker/mission_cmd',
+    'mission_cmd_outgoing': '/modem/packer/mission_cmd',
+    'nav_incoming':         '/modem/unpacker/nav_sts',
+    'nav_outgoing':         '/modem/packer/nav_sts',
     'image_string_incoming':'/modem/unpacker/image',
     'image_string_outgoing':'/modem/packer/image',
 
@@ -114,6 +118,8 @@ TYPE_TO_ID = {
     _BODY_REQUEST:          2,
     _NAV:                   5,
     _STRING_IMAGE:          10,
+    _MISSION_STS:           11,
+    _MISSION_CMD:           12,
 
     # general messages described in the config
     _ACK:                   64,
@@ -131,6 +137,8 @@ TYPE_TO_ID = {
 ID_TO_TYPE = dict((value, key) for key, value in TYPE_TO_ID.items())
 
 # struct formats for encoding/decoding parts of the messages
+# types that can be used can be found here:
+#   - https://docs.python.org/2/library/struct.html
 FORMAT = {
     # protocol specific
     HEADER:                'BHd',  # payload type, msg id, stamp in seconds
@@ -140,6 +148,8 @@ FORMAT = {
     _POSITION_REQUEST:      'ffffff',  # requested pose on 6 axes
     _BODY_REQUEST:          'ffffff',  # requested pose on 6 axes
     _NAV:                   'ddd',  # latitude, longitude, stamp in seconds
+    _MISSION_STS:           'ddfBdB',  # lat, long, yaw, mode, elapsed_time, packed_bools
+    _MISSION_CMD:           'B',  # numerical command
     _ACK:                   'H',  # msg id
     _MM_ACK:                'H',  # mm msg id
     _MM_REQUEST:            'HB',  # mm msg id, number of messages, msg ids
@@ -152,6 +162,20 @@ MAX_FULL_MSG_LEN = 300
 MAX_MULTI_MSG_BODY_LEN = MAX_FULL_MSG_LEN - (struct.calcsize(FORMAT[HEADER]) + struct.calcsize(FORMAT[MM_HEADER]))
 MULTI_MSG_TIMEOUT = 5  # seconds
 MULTI_MSG_RETRY_LIMIT = 3
+
+def deep_update(source_dict, overriding_dict):
+    """Update a nested dictionary or similar mapping.
+
+    Modify ``source`` in place.
+    """
+    for key, value in overriding_dict.iteritems():
+        if isinstance(value, collections.Mapping) and value:
+            returned = deep_update(source_dict.get(key, {}), value)
+            source_dict[key] = returned
+        else:
+            source_dict[key] = overriding_dict[key]
+    return source_dict
+
 
 class PackerParser(object):
     def __init__(self, name, config, outgoing, incoming):
@@ -178,6 +202,8 @@ class PackerParser(object):
             _BODY_REQUEST:         self.parse_body_req,
             _NAV:                  self.parse_nav,
             _STRING_IMAGE:         self.parse_string,
+            _MISSION_STS:          self.parse_mission_sts,
+            _MISSION_CMD:          self.parse_mission_cmd,
             _ACK:                  self.parse_ack,
             _MM_ACK:               self.parse_mm_ack,
             _MM_REQUEST:           self.parse_mm_request,
@@ -191,6 +217,9 @@ class PackerParser(object):
         self.pub_position = rospy.Publisher(topics['position_incoming'], PilotRequest, tcp_nodelay=True, queue_size=1)
         self.pub_body = rospy.Publisher(topics['body_incoming'], PilotRequest, tcp_nodelay=True, queue_size=1)
         self.pub_string = rospy.Publisher(topics['image_string_incoming'], String, tcp_nodelay=True, queue_size=1)
+        # eurathlon specific
+        self.pub_mission_sts = rospy.Publisher(topics['mission_sts_incoming'], MissionStatus, tcp_nodelay=True, queue_size=1)
+        self.pub_mission_cmd = rospy.Publisher(topics['mission_cmd_incoming'], MissionCommand, tcp_nodelay=True, queue_size=1)
 
         # publishers for incoming general messages (based on the description in config)
         # maps from topic id to publisher
@@ -206,6 +235,9 @@ class PackerParser(object):
         self.sub_position = rospy.Subscriber(topics['position_outgoing'], PilotRequest, self.handle_position, tcp_nodelay=True, queue_size=1)
         self.sub_body = rospy.Subscriber(topics['body_outgoing'], PilotRequest, self.handle_body, tcp_nodelay=True, queue_size=1)
         self.sub_string = rospy.Subscriber(topics['image_string_outgoing'], String, self.handle_string, tcp_nodelay=True, queue_size=1)
+        # eurathlon specific
+        self.sub_mission_sts = rospy.Subscriber(topics['mission_sts_outgoing'], MissionStatus, self.handle_mission_sts, tcp_nodelay=True, queue_size=1)
+        self.sub_mission_cmd = rospy.Subscriber(topics['mission_cmd_outgoing'], MissionCommand, self.handle_mission_cmd, tcp_nodelay=True, queue_size=1)
 
         # subscribers for outgoing general messages (based on the description in config)
         # self.sub_outgoing = [rospy.Subscriber(gm['subscribe_topic'],
@@ -246,6 +278,24 @@ class PackerParser(object):
     def handle_string(self, ros_msg):
         payload_type = _STRING_IMAGE
         payload_body = ros_msg.payload
+
+        msg_box = mc.MessageContainer(payload_type, self.target_address, payload_body)
+
+        self.add_to_buffer(msg_box)
+
+    def handle_mission_sts(self, ros_msg):
+        payload_type = _MISSION_STS
+        bundled_fields = (ros_msg.latitude, ros_msg.longitude, ros_msg.yaw, ros_msg.mode, ros_msg.elapsed_time.to_sec(),
+                          ros_msg.packed_bools)
+        payload_body = struct.pack(FORMAT[payload_type], *bundled_fields)
+
+        msg_box = mc.MessageContainer(payload_type, self.target_address, payload_body)
+
+        self.add_to_buffer(msg_box)
+
+    def handle_mission_cmd(self, ros_msg):
+        payload_type = _MISSION_CMD
+        payload_body = struct.pack(FORMAT[payload_type], ros_msg.command)
 
         msg_box = mc.MessageContainer(payload_type, self.target_address, payload_body)
 
@@ -328,8 +378,8 @@ class PackerParser(object):
         self.multi_msg_out_cnt += 1
 
         # to induce failure in sending first part do:
-        for box in multi_msg.boxes[1:]:
-        # for box in multi_msg.boxes:
+        # for box in multi_msg.boxes[1:]:
+        for box in multi_msg.boxes:
             self.outgoing_msg_buffer.appendleft(box)
 
     def handle_burst_msg(self, msg):
@@ -388,6 +438,7 @@ class PackerParser(object):
         values = struct.unpack(FORMAT[payload_type], body)
 
         pilot_msg = PilotRequest()
+        pilot_msg.header.stamp = rospy.Time.from_sec(dispatch_time)
         pilot_msg.position = list(values[0:6])
 
         self.pub_body.publish(pilot_msg)
@@ -397,6 +448,47 @@ class PackerParser(object):
         msg.header.stamp = rospy.Time.from_sec(dispatch_time)
         msg.payload = body
         self.pub_string.publish(msg)
+
+    def parse_mission_sts(self, payload_type, id, dispatch_time, body, origin_address):
+        NUMBER_OF_PACKED_BOOLS = 6
+
+        values = struct.unpack(FORMAT[payload_type], body)
+
+        msg = MissionStatus()
+        msg.header.stamp = rospy.Time.from_sec(dispatch_time)
+
+        print TYPE_TO_ID[payload_type]
+        print values
+
+        msg.latitude = values[0]
+        msg.longitude = values[1]
+        msg.yaw = values[2]
+        msg.mode = values[3]
+        msg.elapsed_time = rospy.Time.from_sec(values[4])
+
+        msg.packed_bools = values[5]
+        binary_string = '{0:b}'.format(msg.packed_bools)
+        binary_chars = list(binary_string.zfill(NUMBER_OF_PACKED_BOOLS))
+        binary_chars.reverse()
+        bool_array = np.array(binary_chars).astype('bool')
+
+        msg.gate_reached = bool_array[0]
+        msg.opi_found = bool_array[1]
+        msg.plume_reached = bool_array[2]
+        msg.pipe_reached = bool_array[3]
+        msg.valve_found = bool_array[4]
+        msg.home_reached = bool_array[5]
+
+        self.pub_mission_sts.publish(msg)
+
+    def parse_mission_cmd(self, payload_type, id, dispatch_time, body, origin_address):
+        values = struct.unpack(FORMAT[payload_type], body)
+
+        msg = MissionCommand()
+        msg.header.stamp = rospy.Time.from_sec(dispatch_time)
+        msg.command = values[0]
+
+        self.pub_mission_cmd.publish(msg)
 
     def parse_ack(self, payload_type, id, dispatch_time, body, origin_address):
         values = struct.unpack(FORMAT[payload_type], body)
@@ -521,8 +613,10 @@ if __name__ == '__main__':
     config = DEFAULT_CONFIG.copy()
     # load global parameters
     param_config = rospy.get_param('~packer_config', {})
+
     # Update default settings with user specified params
-    config.update(param_config)
+    # config.update(param_config)
+    deep_update(config, param_config)
 
     general_outgoing = rospy.get_param('~general_messages_outgoing', {})
     general_incoming = rospy.get_param('~general_messages_incoming', {})
