@@ -98,7 +98,8 @@ TOPICS = {
 # messages which require ack
 REQUIRING_ACK = [
     _POSITION_REQUEST,
-    _BODY_REQUEST
+    _BODY_REQUEST,
+    _MISSION_CMD
 ]
 
 DEFAULT_CONFIG = {
