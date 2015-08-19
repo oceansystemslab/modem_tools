@@ -3,7 +3,7 @@
     <!-- start the modem -->
     <node name="packer_nessie" pkg="modem_tools" type="payload_processor.py" output="screen">
         <!-- set topics input and outputs -->
-        <rosparam command="load" file="$(find modem_tools)/conf/nessie_config.yaml" />
+        <rosparam command="load" file="$(find modem_tools)/conf/nessie_packer.yaml" />
         <!--<rosparam command="load" file="$(find modem_tools)/conf/general_outgoing.yaml" />-->
         <!--<rosparam command="load" file="$(find modem_tools)/conf/general_incoming.yaml" />-->
     </node>

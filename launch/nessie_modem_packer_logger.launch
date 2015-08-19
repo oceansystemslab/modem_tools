@@ -1,0 +1,5 @@
+<launch>
+    <include file="$(find evologics_driver)/launch/nessie_usbl.launch"/>
+    <include file="$(find modem_tools)/launch/nessie_packer.launch"/>
+    <include file="$(find status_logger)/launch/status_logger.launch"/>
+</launch>
