@@ -17,4 +17,5 @@ packer_config:
         image_string_outgoing:  '/none'
 
         node_status:           '/modem/unpacker/status'
-    requiring_ack: ['body_request', 'position_request']
+
+
