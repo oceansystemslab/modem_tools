@@ -8,6 +8,6 @@
         <!--<rosparam command="load" file="$(find modem_tools)/conf/general_incoming.yaml" />-->
     </node>
 
-    <node name="image_unpacker" pkg="modem_tools" type="image_unpacker.py" output="screen"/>
+    <!--<node name="image_unpacker" pkg="modem_tools" type="image_unpacker.py" output="screen"/>-->
 
 </launch>
