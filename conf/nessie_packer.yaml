@@ -2,7 +2,7 @@ packer_config:
     loop_rate:  4  # Hz
     retries:    2  # Hz
     retry_delay: 30  # seconds
-    target_address: 1  # Emily modem
+    target_address: 9  # standalone modem
     topics:
         modem_incoming:         '/modem/burst/in'
         modem_outgoing:         '/modem/burst/out'
