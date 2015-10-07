@@ -459,6 +459,8 @@ class PackerParser(object):
     def parse_mission_sts(self, payload_type, id, dispatch_time, body, origin_address):
         NUMBER_OF_PACKED_BOOLS = 5
 
+        print len(body)
+
         values = struct.unpack(FORMAT[payload_type], body)
 
         msg = MissionStatus()
