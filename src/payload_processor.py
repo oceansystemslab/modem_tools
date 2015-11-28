@@ -51,7 +51,7 @@ import message_config as mc
 # Messages
 from auv_msgs.msg import NavSts
 from vehicle_interface.msg import AcousticModemPayload, PilotRequest, String, AcousticDeconstructionStatus
-from eurathlon_msgs.msg import MissionStatus, Command
+# from eurathlon_msgs.msg import MissionStatus, Command
 
 # TODO: add general message sending
 
@@ -59,8 +59,8 @@ from eurathlon_msgs.msg import MissionStatus, Command
 _POSITION_REQUEST = 'position_request'
 _BODY_REQUEST = 'body_request'
 _NAV = 'nav'
-_MISSION_STS = 'mission_sts'
-_MISSION_CMD = 'mission_cmd'
+# _MISSION_STS = 'mission_sts'
+# _MISSION_CMD = 'mission_cmd'
 _STRING_IMAGE = 'string_image'
 _ACK = 'ack'
 _MM_ACK = 'multi_message_ack'
@@ -83,10 +83,10 @@ TOPICS = {
     'body_outgoing':        '/modem/packer/body_req',
     'position_incoming':    '/modem/unpacker/position_req',
     'position_outgoing':    '/modem/packer/position_req',
-    'mission_sts_incoming': '/modem/unpacker/mission_sts',
-    'mission_sts_outgoing': '/modem/packer/mission_sts',
-    'mission_cmd_incoming': '/modem/unpacker/command',
-    'mission_cmd_outgoing': '/modem/packer/command',
+    # 'mission_sts_incoming': '/modem/unpacker/mission_sts',
+    # 'mission_sts_outgoing': '/modem/packer/mission_sts',
+    # 'mission_cmd_incoming': '/modem/unpacker/command',
+    # 'mission_cmd_outgoing': '/modem/packer/command',
     'nav_incoming':         '/modem/unpacker/nav_sts',
     'nav_outgoing':         '/modem/packer/nav_sts',
     'image_string_incoming':'/modem/unpacker/image',
@@ -99,7 +99,7 @@ TOPICS = {
 REQUIRING_ACK = [
     _POSITION_REQUEST,
     _BODY_REQUEST,
-    _MISSION_CMD
+    # _MISSION_CMD
 ]
 
 DEFAULT_CONFIG = {
@@ -119,8 +119,8 @@ TYPE_TO_ID = {
     _BODY_REQUEST:          2,
     _NAV:                   5,
     _STRING_IMAGE:          10,
-    _MISSION_STS:           11,
-    _MISSION_CMD:           12,
+    # _MISSION_STS:           11,
+    # _MISSION_CMD:           12,
 
     # general messages described in the config
     _ACK:                   64,
@@ -150,8 +150,8 @@ FORMAT = {
     _BODY_REQUEST:          'ffffff',  # requested pose on 6 axes
     _NAV:                   'ddd',  # latitude, longitude, stamp in seconds
     # _MISSION_STS:           'ddfBdB',  # lat, long, yaw, mode, elapsed_time, packed_bools
-    _MISSION_STS:           'ffffdB',  # north, east, depth, yaw, elapsed_time, packed_bools
-    _MISSION_CMD:           'BB',  # numerical command
+    # _MISSION_STS:           'ffffdB',  # north, east, depth, yaw, elapsed_time, packed_bools
+    # _MISSION_CMD:           'BB',  # numerical command
     _ACK:                   'H',  # msg id
     _MM_ACK:                'H',  # mm msg id
     _MM_REQUEST:            'HB',  # mm msg id, number of messages, msg ids
@@ -204,8 +204,8 @@ class PackerParser(object):
             _BODY_REQUEST:         self.parse_body_req,
             _NAV:                  self.parse_nav,
             _STRING_IMAGE:         self.parse_string,
-            _MISSION_STS:          self.parse_mission_sts,
-            _MISSION_CMD:          self.parse_mission_cmd,
+            # _MISSION_STS:          self.parse_mission_sts,
+            # _MISSION_CMD:          self.parse_mission_cmd,
             _ACK:                  self.parse_ack,
             _MM_ACK:               self.parse_mm_ack,
             _MM_REQUEST:           self.parse_mm_request,
@@ -220,8 +220,8 @@ class PackerParser(object):
         self.pub_body = rospy.Publisher(topics['body_incoming'], PilotRequest, tcp_nodelay=True, queue_size=1)
         self.pub_string = rospy.Publisher(topics['image_string_incoming'], String, tcp_nodelay=True, queue_size=1)
         # eurathlon specific
-        self.pub_mission_sts = rospy.Publisher(topics['mission_sts_incoming'], MissionStatus, tcp_nodelay=True, queue_size=1)
-        self.pub_mission_cmd = rospy.Publisher(topics['mission_cmd_incoming'], Command, tcp_nodelay=True, queue_size=1)
+        # self.pub_mission_sts = rospy.Publisher(topics['mission_sts_incoming'], MissionStatus, tcp_nodelay=True, queue_size=1)
+        # self.pub_mission_cmd = rospy.Publisher(topics['mission_cmd_incoming'], Command, tcp_nodelay=True, queue_size=1)
 
         # publishers for incoming general messages (based on the description in config)
         # maps from topic id to publisher
@@ -238,8 +238,8 @@ class PackerParser(object):
         self.sub_body = rospy.Subscriber(topics['body_outgoing'], PilotRequest, self.handle_body, tcp_nodelay=True, queue_size=1)
         self.sub_string = rospy.Subscriber(topics['image_string_outgoing'], String, self.handle_string, tcp_nodelay=True, queue_size=1)
         # eurathlon specific
-        self.sub_mission_sts = rospy.Subscriber(topics['mission_sts_outgoing'], MissionStatus, self.handle_mission_sts, tcp_nodelay=True, queue_size=1)
-        self.sub_mission_cmd = rospy.Subscriber(topics['mission_cmd_outgoing'], Command, self.handle_mission_cmd, tcp_nodelay=True, queue_size=1)
+        # self.sub_mission_sts = rospy.Subscriber(topics['mission_sts_outgoing'], MissionStatus, self.handle_mission_sts, tcp_nodelay=True, queue_size=1)
+        # self.sub_mission_cmd = rospy.Subscriber(topics['mission_cmd_outgoing'], Command, self.handle_mission_cmd, tcp_nodelay=True, queue_size=1)
 
         # subscribers for outgoing general messages (based on the description in config)
         # self.sub_outgoing = [rospy.Subscriber(gm['subscribe_topic'],
@@ -285,28 +285,28 @@ class PackerParser(object):
 
         self.add_to_buffer(msg_box)
 
-    def handle_mission_sts(self, ros_msg):
-        payload_type = _MISSION_STS
-
-        # fields with geo referenced position
-        # bundled_fields = (ros_msg.latitude, ros_msg.longitude, ros_msg.yaw, ros_msg.mode, ros_msg.elapsed_time.to_sec(),
-        #                   ros_msg.packed_bools)
-
-        bundled_fields = (ros_msg.north, ros_msg.east, ros_msg.depth, ros_msg.yaw,
-                          ros_msg.elapsed_time.to_sec(), ros_msg.packed_bools)
-        payload_body = struct.pack(FORMAT[payload_type], *bundled_fields)
-
-        msg_box = mc.MessageContainer(payload_type, self.target_address, payload_body)
-
-        self.add_to_buffer(msg_box)
-
-    def handle_mission_cmd(self, ros_msg):
-        payload_type = _MISSION_CMD
-        payload_body = struct.pack(FORMAT[payload_type], ros_msg.mode, ros_msg.resume_point)
-
-        msg_box = mc.MessageContainer(payload_type, self.target_address, payload_body)
-
-        self.add_to_buffer(msg_box)
+    # def handle_mission_sts(self, ros_msg):
+    #     payload_type = _MISSION_STS
+    #
+    #     # fields with geo referenced position
+    #     # bundled_fields = (ros_msg.latitude, ros_msg.longitude, ros_msg.yaw, ros_msg.mode, ros_msg.elapsed_time.to_sec(),
+    #     #                   ros_msg.packed_bools)
+    #
+    #     bundled_fields = (ros_msg.north, ros_msg.east, ros_msg.depth, ros_msg.yaw,
+    #                       ros_msg.elapsed_time.to_sec(), ros_msg.packed_bools)
+    #     payload_body = struct.pack(FORMAT[payload_type], *bundled_fields)
+    #
+    #     msg_box = mc.MessageContainer(payload_type, self.target_address, payload_body)
+    #
+    #     self.add_to_buffer(msg_box)
+    #
+    # def handle_mission_cmd(self, ros_msg):
+    #     payload_type = _MISSION_CMD
+    #     payload_body = struct.pack(FORMAT[payload_type], ros_msg.mode, ros_msg.resume_point)
+    #
+    #     msg_box = mc.MessageContainer(payload_type, self.target_address, payload_body)
+    #
+    #     self.add_to_buffer(msg_box)
 
     def add_to_buffer(self, msg_box):
         msg_box.id = self.msg_out_cnt
@@ -456,44 +456,44 @@ class PackerParser(object):
         msg.payload = body
         self.pub_string.publish(msg)
 
-    def parse_mission_sts(self, payload_type, id, dispatch_time, body, origin_address):
-        NUMBER_OF_PACKED_BOOLS = 5
-
-        print len(body)
-
-        values = struct.unpack(FORMAT[payload_type], body)
-
-        msg = MissionStatus()
-        msg.header.stamp = rospy.Time.from_sec(dispatch_time)
-
-        msg.north, msg.east, msg.depth,\
-            msg.yaw, elapsed_time_seconds, msg.packed_bools = values
-
-        msg.elapsed_time = rospy.Time.from_sec(elapsed_time_seconds)
-
-        binary_string = '{0:b}'.format(msg.packed_bools)
-        binary_chars = list(binary_string.zfill(NUMBER_OF_PACKED_BOOLS))
-        binary_chars.reverse()
-        bool_array = np.array(binary_chars).astype('bool')
-
-        msg.gate_found = bool_array[0]
-        msg.opi_found = bool_array[1]
-        msg.plume_reached = bool_array[2]
-        msg.pipe_reached = bool_array[3]
-        msg.valve_found = bool_array[4]
-        # msg.home_reached = bool_array[5]
-
-        self.pub_mission_sts.publish(msg)
-
-    def parse_mission_cmd(self, payload_type, id, dispatch_time, body, origin_address):
-        values = struct.unpack(FORMAT[payload_type], body)
-
-        msg = Command()
-        msg.header.stamp = rospy.Time.from_sec(dispatch_time)
-        msg.mode = values[0]
-        msg.resume_point = values[1]
-
-        self.pub_mission_cmd.publish(msg)
+    # def parse_mission_sts(self, payload_type, id, dispatch_time, body, origin_address):
+    #     NUMBER_OF_PACKED_BOOLS = 5
+    #
+    #     print len(body)
+    #
+    #     values = struct.unpack(FORMAT[payload_type], body)
+    #
+    #     msg = MissionStatus()
+    #     msg.header.stamp = rospy.Time.from_sec(dispatch_time)
+    #
+    #     msg.north, msg.east, msg.depth,\
+    #         msg.yaw, elapsed_time_seconds, msg.packed_bools = values
+    #
+    #     msg.elapsed_time = rospy.Time.from_sec(elapsed_time_seconds)
+    #
+    #     binary_string = '{0:b}'.format(msg.packed_bools)
+    #     binary_chars = list(binary_string.zfill(NUMBER_OF_PACKED_BOOLS))
+    #     binary_chars.reverse()
+    #     bool_array = np.array(binary_chars).astype('bool')
+    #
+    #     msg.gate_found = bool_array[0]
+    #     msg.opi_found = bool_array[1]
+    #     msg.plume_reached = bool_array[2]
+    #     msg.pipe_reached = bool_array[3]
+    #     msg.valve_found = bool_array[4]
+    #     # msg.home_reached = bool_array[5]
+    #
+    #     self.pub_mission_sts.publish(msg)
+    #
+    # def parse_mission_cmd(self, payload_type, id, dispatch_time, body, origin_address):
+    #     values = struct.unpack(FORMAT[payload_type], body)
+    #
+    #     msg = Command()
+    #     msg.header.stamp = rospy.Time.from_sec(dispatch_time)
+    #     msg.mode = values[0]
+    #     msg.resume_point = values[1]
+    #
+    #     self.pub_mission_cmd.publish(msg)
 
     def parse_ack(self, payload_type, id, dispatch_time, body, origin_address):
         values = struct.unpack(FORMAT[payload_type], body)

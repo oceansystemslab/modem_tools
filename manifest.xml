@@ -11,8 +11,8 @@
   <depend package="std_msgs"/>
   <depend package="auv_msgs"/>
   <depend package="vehicle_interface"/>
-  <depend package="eurathlon_msgs"/>
-  <depend package="status_logger"/>
+  <!--<depend package="eurathlon_msgs"/>-->
+  <!--<depend package="status_logger"/>-->
 
 </package>
 
